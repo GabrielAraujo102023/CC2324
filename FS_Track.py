@@ -1,6 +1,23 @@
 import socket
 import threading
 
+files = {}
+HOST = socket.gethostname()
+PORT = 9090
+
+
+def main():
+    # Criação do Socket
+    tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tcpSocket.bind((HOST, PORT))
+    tcpSocket.listen()
+    print("Servidor ativo em " + HOST + " porta " + str(PORT))
+
+    while True:
+        (clientSocket, clientAddress) = tcpSocket.accept()
+        t = threading.Thread(target=connectionTask, args=[clientSocket, clientAddress])
+        t.run()
+
 
 def connectionTask(clientSocket, clientAddress):
     message = "a"
@@ -14,26 +31,11 @@ def connectionTask(clientSocket, clientAddress):
         if message == "-1":
             clientSocket.shutdown()
             clientSocket.close()
-        elif files[message] != None:
+        elif files[message] is None:
             for address in files[message]:
                 clientSocket.send(address)
-                
+            clientSocket.send("-1")
 
 
-
-
-files = {}
-
-HOST = socket.gethostname()
-PORT = 9090
-
-# Criação do Socket
-tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-tcpSocket.bind((HOST, PORT))
-tcpSocket.listen()
-print("Servidor ativo em " + HOST + " porta " + str(PORT))
-
-while True:
-    (clientSocket, clientAddress) = tcpSocket.accept()
-    t = threading.Thread(target=connectionTask, args=[clientSocket, clientAddress])
-    t.run()
+if __name__ == '__main__':
+    main()
