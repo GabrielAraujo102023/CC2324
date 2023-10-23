@@ -7,9 +7,9 @@ HOST = socket.gethostname()
 
 
 def main():
-    # Verifica se usa um Port costumizadoo
+    print("HOST IS " + HOST)
     PORT = 9090
-    if len(sys.argv) == 2:
+    if len(sys.argv) == 2:  # Verifica se usa um Port costumizadoo
         PORT = sys.argv[1]
     # Criação do Socket
     tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
