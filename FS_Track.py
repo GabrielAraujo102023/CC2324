@@ -3,23 +3,24 @@ import sys
 import threading
 
 files = {}
-HOST = socket.gethostname()
+HOST = "10.0.0.10"
 
 
 def main():
     print("HOST IS " + HOST)
     PORT = 9090
     if len(sys.argv) == 2:  # Verifica se usa um Port costumizadoo
-        PORT = sys.argv[1]
+        PORT = int(sys.argv[1])
     # Criação do Socket
     tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    tcpSocket.bind((HOST, PORT))
+    tcpSocket.bind(("10.0.0.10", PORT))
     tcpSocket.listen()
     print("Servidor ativo em " + HOST + " porta " + str(PORT))
 
     # Fica à espera de conexões novas, cria uma thread para cada nodo que se conecta
     while True:
         (clientSocket, clientAddress) = tcpSocket.accept()
+        print("conectado a cliente: " + str(clientAddress))
         t = threading.Thread(target=connectionTask, args=[clientSocket, clientAddress])
         t.run()
 
