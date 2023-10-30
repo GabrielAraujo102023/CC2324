@@ -2,7 +2,6 @@ import os
 import sys
 import socket
 import threading
-import glob
 
 if len(sys.argv) < 3 or len(sys.argv) > 4:
     print("Usage: FS_Node <share_folder> <address> <port>")
@@ -32,11 +31,11 @@ def connect_to_tracker():
         fs_node_tcp.connect((tracker_host, int(tracker_port)))
 
         # Update node_info with the correct address
-        node_info["address"] = fs_node_tcp.getsockname()
-        allFiles = glob.glob(shared_folder)               #TODO: METER A MANDAR Os NOMES DOS FICHEIROS DIREITOS
-        fs_node_tcp.send(file.encode())
-        print("mandou ficheiros todos")
+        for _, _, files in os.walk(shared_folder):
+            for file in files:
+                fs_node_tcp.send(file.encode())
         fs_node_tcp.send("-1".encode())
+        print("Ficheiros enviados")
 
         while True:
             os.system("clear")
@@ -46,6 +45,7 @@ def connect_to_tracker():
             if choice == "1":
                 askForFile(fs_node_tcp)
             elif choice == "2":
+                fs_node_tcp.send("-1".encode())
                 disconnect(fs_node_tcp)
     except Exception as e:
         print(f"Error connecting to the tracker: {e}")
@@ -100,14 +100,13 @@ def askForFile(tcpSocket):
 
 
 def disconnect(tcpSocket):
-    tcpSocket.send("-1")
-    tcpSocket.shutdown()
+    tcpSocket.send("-1".encode())
+    tcpSocket.shutdown(socket.SHUT_RDWR)
     tcpSocket.close()
+    sys.exit()
 
 
 if __name__ == "__main__":
-
-
     tracker_thread = threading.Thread(target=connect_to_tracker)
     tracker_thread.start()
 
