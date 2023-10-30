@@ -30,9 +30,10 @@ def connectionTask(clientSocket, clientAddress):
     message = "a"
     # Recebe o nome de todos os ficheiros
     while message != "-1":
-        message = clientSocket.recv(1024)
-        files[message] = []
-        files[message].append(clientAddress)
+        data, addr = clientSocket.recv(1024)
+        print(data.decode())
+        files[data.decode()] = []
+        files[data.decode()].append(clientAddress)
 
     # Verifica se a conexão é fechada ou recebe um nome de um ficheiro e envia todos os nodos associados a este
     # TODO: Adicionar timeouts

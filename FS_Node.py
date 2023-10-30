@@ -2,7 +2,7 @@ import os
 import sys
 import socket
 import threading
-import hashlib
+import glob
 
 if len(sys.argv) < 3 or len(sys.argv) > 4:
     print("Usage: FS_Node <share_folder> <address> <port>")
@@ -23,6 +23,7 @@ node_info = {
 
 
 def connect_to_tracker():
+
     fs_node_tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         print(tracker_host)
@@ -32,11 +33,9 @@ def connect_to_tracker():
 
         # Update node_info with the correct address
         node_info["address"] = fs_node_tcp.getsockname()
-
-        fs_node_tcp.send(fs_node_tcp.getsockname()[0].encode())
-        print("mandou")
-        for file in node_info["blocks"]:
-            fs_node_tcp.send(file)
+        allFiles = glob.glob(shared_folder)               #TODO: METER A MANDAR Os NOMES DOS FICHEIROS DIREITOS
+        fs_node_tcp.send(file.encode())
+        print("mandou ficheiros todos")
         fs_node_tcp.send("-1".encode())
 
         while True:
@@ -51,7 +50,7 @@ def connect_to_tracker():
     except Exception as e:
         print(f"Error connecting to the tracker: {e}")
 
-
+"""
 def is_file_divided():
     for root, _, files in os.walk(shared_folder):
         for file in files:
@@ -68,16 +67,15 @@ def divide_file_into_blocks(file_path):
             data = file.read(block_size)
             if not data:
                 break
-            block_id = hashlib.md5(data).hexdigest()  # Unique identifier for the block
-            available_blocks[block_id] = {
-                "owner": node_info["address"],
-                "available": True,
+
+            available_blocks[file_path] = {
+                blocks.append()
             }
             block_path = os.path.join(shared_folder, block_id)
             with open(block_path, 'wb') as block_file:
                 block_file.write(data)
             block_number += 1
-
+"""
 
 def file_transfer():
     fs_node_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -108,7 +106,7 @@ def disconnect(tcpSocket):
 
 
 if __name__ == "__main__":
-    is_file_divided()
+
 
     tracker_thread = threading.Thread(target=connect_to_tracker)
     tracker_thread.start()
