@@ -28,7 +28,8 @@ def main():
 def connectionTask(clientSocket, clientAddress):
     fileName, address = clientSocket.recvfrom(1024)
     # Recebe o nome de todos os ficheiros
-    while fileName != "b'-1'":
+    stop = "-1".encode()
+    while fileName != stop:
         if files.keys().__contains__(fileName):
             files[fileName].append(address)
         else:
@@ -41,7 +42,8 @@ def connectionTask(clientSocket, clientAddress):
     while True:
         print("asdasdasdasd")
         message, address = clientSocket.recvfrom(1024)
-        if message == "-1":
+        print("message -> " + str(message))
+        if message == stop:
             print("asdasdasdasd")
             clientSocket.shutdown(socket.SHUT_RDWR)
             clientSocket.close()
@@ -56,7 +58,7 @@ def cleanClient(address):
         for add in file:
             if add == address:
                 files[file].remove(add)
-    print("Cliente " + address + " desconectou")
+    print("Cliente " + str(address) + " desconectou")
 
 
 if __name__ == '__main__':
