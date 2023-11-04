@@ -1,6 +1,7 @@
 import socket
 import sys
 import threading
+import json
 
 files = {}
 
@@ -18,47 +19,58 @@ def main():
 
     # Fica à espera de conexões novas, cria uma thread para cada nodo que se conecta
     while True:
-        (clientSocket, clientAddress) = tcpSocket.accept()
+        clientSocket, clientAddress = tcpSocket.accept()
         print("Conectado a cliente: " + str(clientAddress))
-        t = threading.Thread(target=connectionTask, args=[clientSocket, clientAddress])
-        t.run()
+        t = threading.Thread(target=connectionTask, args=[clientSocket, clientAddress[0]])
+        t.start()
 
 
 # Função usada pelas threads das nodes
 def connectionTask(clientSocket, clientAddress):
-    fileName, address = clientSocket.recvfrom(1024)
+    message = clientSocket.recv(1024).decode()
+    fileNames = message.split('\n')
     # Recebe o nome de todos os ficheiros
-    stop = "-1".encode()
-    while fileName != stop:
-        if files.keys().__contains__(fileName):
-            files[fileName].append(address)
-        else:
-            files[fileName] = []
-        fileName, address = clientSocket.recvfrom(1024)
-        print(fileName)
+    stop = "-1"
+    for file in fileNames:
+        if file != stop:
+            if file in files:
+                files[file].append(clientAddress)
+            else:
+                files.update({file: [clientAddress]})
+            print(file)
 
     # Verifica se a conexão é fechada ou recebe um nome de um ficheiro e envia todos os nodos associados a este
     # TODO: Adicionar timeouts
     while True:
-        print("asdasdasdasd")
-        message, address = clientSocket.recvfrom(1024)
+        print(files)
+        print("ESPERANDO")
+        message = clientSocket.recv(1024).decode()
+        addressList = []
         print("message -> " + str(message))
         if message == stop:
-            print("asdasdasdasd")
-            clientSocket.shutdown(socket.SHUT_RDWR)
+            try:
+                clientSocket.shutdown(socket.SHUT_RDWR)
+            except Exception as e:
+                print(f"Erro a desativar a socket: {e}")
             clientSocket.close()
-            cleanClient(address)
-        elif files[message] is not None:
-            for address in files[message]:
-                clientSocket.send(address)
+            print("Cliente " + str(clientAddress) + " desconectou")
+            cleanClient(clientAddress)
+            break
+        elif message in files:
+            addressList = files[message]
+        addressListJson = json.dumps(addressList)
+        clientSocket.send(addressListJson.encode())
 
 
 def cleanClient(address):
-    for file in files:
-        for add in file:
-            if add == address:
-                files[file].remove(add)
-    print("Cliente " + str(address) + " desconectou")
+    del_list = []
+    for file, add in files.items():
+        if address in add:
+            add.remove(address)
+        if len(add) == 0:
+            del_list.append(file)
+    for file in del_list:
+        del files[file]
 
 
 if __name__ == '__main__':
