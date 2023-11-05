@@ -8,17 +8,16 @@ import json
 
 import select
 
-if len(sys.argv) < 4 or len(sys.argv) > 5:
-    print("Usage: FS_Node <share_folder> <local_address> <server_address> <port>")
+if len(sys.argv) < 3 or len(sys.argv) > 4:
+    print("Usage: FS_Node <share_folder> <server_address> <port>")
     sys.exit(1)
 
 os.environ['TERM'] = 'xterm'
 shared_folder = sys.argv[1]
-local_udp_address = sys.argv[2]
-tracker_host = sys.argv[3]
+tracker_host = sys.argv[2]
 tracker_port = 9090
-if len(sys.argv) == 5:
-    tracker_port = sys.argv[4]
+if len(sys.argv) == 4:
+    tracker_port = sys.argv[3]
 udp_port = 9090
 socket_tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 socket_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -26,6 +25,7 @@ exit_flag = False
 files_available = []
 FILE_REQUEST = 1
 FILE = 2
+local_address = ""
 
 
 def main():
@@ -43,14 +43,16 @@ def main():
             askForFile()
         elif choice == "2":
             disconnect()
-    # udp_thread.join()
+    udp_thread.join()
     print(f"DESCONETADO COM SUCESSO!")
 
 
 def wait_for_file_request():
+    global local_address
     try:
-        socket_udp.bind((local_udp_address, udp_port))
-        print(f"FS Transfer Protocol: à escuta em {local_udp_address} na porta UDP {udp_port} ")
+        local_address, _ = socket_udp.getsockname()
+        socket_udp.bind((local_address, udp_port))
+        print(f"FS Transfer Protocol: à escuta em {local_address} na porta UDP {udp_port} ")
 
         while not exit_flag:
             ready, _, _ = select.select([socket_udp], [], [], 3)
@@ -114,11 +116,8 @@ def connect_to_tracker():
             for file in files:
                 file_names.append(file)
                 files_available.append(file)
-        message = {
-            "udp_address": local_udp_address,
-            "file_names": file_names
-        }
-        socket_tcp.send(json.dumps(message).encode())
+
+        socket_tcp.send(json.dumps(file_names).encode())
         print("Conexão FS Track Protocol com servidor " + tracker_host + " porta " + str(tracker_port))
 
     except Exception as e:

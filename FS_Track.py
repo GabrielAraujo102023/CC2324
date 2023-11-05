@@ -29,15 +29,14 @@ def main():
 # Função usada pelas threads das nodes
 def connectionTask(clientSocket, clientAddress):
     message = clientSocket.recv(1024).decode()
-    data = json.loads(message)
-    client_udp_address = data["udp_address"]
+    file_names = json.loads(message)
     # Recebe o nome de todos os ficheiros
     stop = "-1"
-    for file in data["file_names"]:
+    for file in file_names:
         if file in files:
-            files[file].append(client_udp_address)
+            files[file].append(clientAddress[0])
         else:
-            files.update({file: [client_udp_address]})
+            files.update({file: [clientAddress[0]]})
     print(files)
 
     # Verifica se a conexão é fechada ou recebe um nome de um ficheiro e envia todos os nodos associados a este
@@ -53,7 +52,7 @@ def connectionTask(clientSocket, clientAddress):
                 print(f"Erro a desativar a socket: {e}")
             clientSocket.close()
             print("Cliente " + str(clientAddress) + " desconectou")
-            cleanClient(client_udp_address)
+            cleanClient(clientAddress[0])
             break
         elif message in files:
             addressList = files[message]
