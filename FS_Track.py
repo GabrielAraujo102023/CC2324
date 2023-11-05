@@ -20,23 +20,23 @@ def main():
     # Fica à espera de conexões novas, cria uma thread para cada nodo que se conecta
     while True:
         print("ESPERANDO")
-        clientSocket, clientAddress = tcpSocket.accept()
-        print("Conectado a cliente: " + str(clientAddress))
-        t = threading.Thread(target=connectionTask, args=[clientSocket, clientAddress[0]])
+        clientSocket, (clientIP, clientPORT) = tcpSocket.accept()
+        print("Conectado a cliente: " + str(clientIP) + " na porta " +str(clientPORT))
+        t = threading.Thread(target=connectionTask, args=[clientSocket, clientIP])
         t.start()
 
 
 # Função usada pelas threads das nodes
-def connectionTask(clientSocket, clientAddress):
+def connectionTask(clientSocket, clientIP):
     message = clientSocket.recv(1024).decode()
     file_names = json.loads(message)
     # Recebe o nome de todos os ficheiros
     stop = "-1"
     for file in file_names:
         if file in files:
-            files[file].append(clientAddress[0])
+            files[file].append(clientIP)
         else:
-            files.update({file: [clientAddress[0]]})
+            files.update({file: [clientIP]})
     print(files)
 
     # Verifica se a conexão é fechada ou recebe um nome de um ficheiro e envia todos os nodos associados a este
@@ -51,8 +51,8 @@ def connectionTask(clientSocket, clientAddress):
             except Exception as e:
                 print(f"Erro a desativar a socket: {e}")
             clientSocket.close()
-            print("Cliente " + str(clientAddress) + " desconectou")
-            cleanClient(clientAddress[0])
+            print("Cliente " + str(clientIP) + " desconectou")
+            cleanClient(clientIP)
             break
         elif message in files:
             addressList = files[message]
