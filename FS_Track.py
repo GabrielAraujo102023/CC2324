@@ -19,6 +19,7 @@ def main():
 
     # Fica à espera de conexões novas, cria uma thread para cada nodo que se conecta
     while True:
+        print("ESPERANDO")
         clientSocket, clientAddress = tcpSocket.accept()
         print("Conectado a cliente: " + str(clientAddress))
         t = threading.Thread(target=connectionTask, args=[clientSocket, clientAddress[0]])
@@ -28,22 +29,20 @@ def main():
 # Função usada pelas threads das nodes
 def connectionTask(clientSocket, clientAddress):
     message = clientSocket.recv(1024).decode()
-    fileNames = message.split('\n')
+    data = json.loads(message)
+    client_udp_address = data["udp_address"]
     # Recebe o nome de todos os ficheiros
     stop = "-1"
-    for file in fileNames:
-        if file != stop:
-            if file in files:
-                files[file].append(clientAddress)
-            else:
-                files.update({file: [clientAddress]})
-            print(file)
+    for file in data["file_names"]:
+        if file in files:
+            files[file].append(client_udp_address)
+        else:
+            files.update({file: [client_udp_address]})
+    print(files)
 
     # Verifica se a conexão é fechada ou recebe um nome de um ficheiro e envia todos os nodos associados a este
     # TODO: Adicionar timeouts
     while True:
-        print(files)
-        print("ESPERANDO")
         message = clientSocket.recv(1024).decode()
         addressList = []
         print("message -> " + str(message))
@@ -54,7 +53,7 @@ def connectionTask(clientSocket, clientAddress):
                 print(f"Erro a desativar a socket: {e}")
             clientSocket.close()
             print("Cliente " + str(clientAddress) + " desconectou")
-            cleanClient(clientAddress)
+            cleanClient(client_udp_address)
             break
         elif message in files:
             addressList = files[message]
