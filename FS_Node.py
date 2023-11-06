@@ -83,9 +83,21 @@ def receive_file(filename, base64_data):
 
         print(f"Ficheiro recebido e guardado em '{save_path}.")
         input("Pressionar Enter para voltar ao menu...")
-
+        t = threading.Thread(target=update_tracker, args=[filename])
+        t.start()
     except Exception as e:
         print(f"ERRO AO RECEBER FICHEIRO: {e}")
+
+
+def update_tracker(filename):
+    message = {
+        "type": 2,
+        "filename": filename
+    }
+    try:
+        socket_tcp.sendto(json.dumps(message).encode(), tracker_host)
+    except Exception as e:
+        print(f"ERRO AO ATUALIZAR FICHEIRO NO TRACKER: {e}")
 
 
 def send_file(filename, addr):
@@ -127,7 +139,11 @@ def connect_to_tracker():
 def askForFile():
     filename = input("Que ficheiro quer?: ")
     if filename not in files_available:
-        socket_tcp.send(filename.encode())
+        request = {
+            "type": 1,
+            "filename": filename
+        }
+        socket_tcp.send(json.dumps(request).encode())
         message = socket_tcp.recv(1024)
         nodes = json.loads(message.decode())
         if nodes:

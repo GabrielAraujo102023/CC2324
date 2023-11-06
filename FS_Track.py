@@ -21,7 +21,7 @@ def main():
     while True:
         print("ESPERANDO")
         clientSocket, (clientIP, clientPORT) = tcpSocket.accept()
-        print("Conectado a cliente: " + str(clientIP) + " na porta " +str(clientPORT))
+        print("Conectado a cliente: " + str(clientIP) + " na porta " + str(clientPORT))
         t = threading.Thread(target=connectionTask, args=[clientSocket, clientIP])
         t.start()
 
@@ -54,8 +54,14 @@ def connectionTask(clientSocket, clientIP):
             print("Cliente " + str(clientIP) + " desconectou")
             cleanClient(clientIP)
             break
-        elif message in files:
-            addressList = files[message]
+        else:
+            jsonMsg = json.loads(message)
+            msgType = jsonMsg["type"]
+            if msgType == 1:
+                addressList = files[jsonMsg["filename"]]
+            elif msgType == 2:
+                files[jsonMsg["filename"]].append(clientIP)
+                continue
         addressListJson = json.dumps(addressList)
         clientSocket.send(addressListJson.encode())
 
