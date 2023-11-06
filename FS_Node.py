@@ -5,6 +5,7 @@ import sys
 import socket
 import threading
 import json
+import re
 
 import select
 
@@ -70,6 +71,7 @@ def wait_for_file_request():
                     t.start()
     except Exception as e:
         print(f"ERRO NA PORTA UDP: {e}")
+    socket_udp.close()
     print(f"PORTA UDP FECHADA")
 
 
@@ -156,7 +158,7 @@ def askForFile():
                 "filename": filename
             }
             socket_udp.sendto(json.dumps(message).encode(), (nodes[0], 9090))
-            # print(f"Ficheiro pedido a {nodes[0]}")
+            choose_best_nodes(nodes)
         else:
             print("Ficheiro nao encontrado")
             input("Pressionar Enter para voltar ao menu...")
@@ -165,13 +167,37 @@ def askForFile():
         input("Pressionar Enter para voltar ao menu...")
 
 
+def get_latency(ip):
+    # Utiliza pings para verificar velocidade de conexão
+    try:
+        ping_output = subprocess.check_output(['ping', '-c', '4', ip])
+        ping_output = ping_output.decode('utf-8')
+
+        # Calcula a média do RTT
+        match = re.search(r'(\d+\.\d+)/\d+\.\d+/\d+\.\d+/\d+\.\d+', ping_output)
+        if match:
+            latency = float(match.group(1))
+            return latency
+    except subprocess.CalledProcessError:
+        pass
+
+    # Em caso de erro
+    return -1
+
+
+def choose_best_nodes(ip_list):
+    # Ordena IPs por velocidade de conexão
+    sorted_ips = sorted(ip_list, key=get_latency)
+    print("sorted ips = " + str(sorted_ips))
+    return sorted_ips
+
+
 def disconnect():
     global exit_flag
     try:
         socket_tcp.send("-1".encode())
         socket_tcp.shutdown(socket.SHUT_RDWR)
         socket_tcp.close()
-        socket_udp.close()
         exit_flag = True
     except Exception as e:
         print(f"Erro ao desconectar: {e}")
