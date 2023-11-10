@@ -1,4 +1,3 @@
-import base64
 import os
 import subprocess
 import sys
@@ -6,6 +5,7 @@ import socket
 import threading
 import json
 import re
+import time
 # from dataclasses import dataclass
 from typing import Dict, List
 import select
@@ -31,6 +31,15 @@ class BlockInfo:
         self.occupied = not self.occupied
 """
 
+
+def read_sys_files(folder):
+    sys_files = []
+    for _, _, filenames in os.walk(folder):
+        for file in filenames:
+            sys_files.append(file)
+    return sys_files
+
+
 os.environ['TERM'] = 'xterm'
 shared_folder = sys.argv[1]
 tracker_host = sys.argv[2]
@@ -42,8 +51,8 @@ socket_tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 socket_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 exit_flag = False
 block_size = 512
-_, _, files = os.walk(shared_folder)
-# blocks_available: Dict[str, BlockInfo] = {}
+files = read_sys_files(shared_folder)
+# blocks_available: {"filename": {blocknumber: bool}}
 blocks_available: Dict[str, Dict[int, bool]] = {}
 FILE_REQUEST_SERVER = 1
 BLOCK_UPDATE = 2
@@ -108,8 +117,6 @@ def receive_file(block_name, block_data):
     with open(save_path, 'wb') as file:
         file.write(data)
 
-    update_tracker(block_name)
-
     file_name, block_number = block_name.split("_")
 
     if file_name in blocks_available:
@@ -117,8 +124,73 @@ def receive_file(block_name, block_data):
     else:
         blocks_available.update({file_name: {block_number: False}})
 
-    if check_if_all_blocks_available(file_name):
-        mount_file(file_name)
+    all_blocks_available, file_hash = check_blocks_available(file_name)
+
+    if all_blocks_available:
+        temp_blocks = mount_file(file_name, file_hash)
+        update_tracker(block_name)
+        delete_temp_blocks(temp_blocks)
+    else:
+        update_tracker(block_name)
+
+
+def delete_temp_blocks(temp_blocks):
+    aux = temp_blocks.copy()
+    while aux:
+        for block in temp_blocks:
+            file_name, block_number = block.split("_")
+            if blocks_available[file_name][block_number]:
+                continue
+            else:
+                os.remove(block)
+                aux.remove(block)
+
+
+def mount_file(file_name, file_hash):
+    file_blocks = []
+    blocks = read_sys_files(temp)
+
+    for block in blocks:
+        block_name, block_number = block.split("_")
+        if block_name != file_name or block_number == "info":
+            continue
+        else:
+            file_blocks.append(block)
+
+    file_blocks = sorted(file_blocks)
+    mounted_file_path = os.path.join(shared_folder, file_name)
+
+    mount_complete = False
+    while not mount_complete:
+        try:
+            with open(mounted_file_path, 'wb') as mounted_file:
+                for block in file_blocks:
+                    block_path = os.path.join(temp, block)
+
+                    with open(block_path, 'rb') as block_data:
+                        block_info = block_data.read()
+                    mounted_file.write(block_info)
+
+            if calculate_file_hash(mounted_file_path) != file_hash:
+                raise Exception
+        except Exception as e:
+            print(f"{e}")
+            os.remove(mounted_file_path)
+            time.sleep(1)
+        else:
+            print("FICHEIRO BEM MONTADO")
+            mount_complete = True
+
+    return file_blocks
+
+
+def check_blocks_available(file_name):
+    file_path = os.path.join(temp, file_name + "_info")
+    with open(file_path, 'r') as file_info:
+        file_hash = file_info.readline()
+        total_blocks = int(file_info.readline())
+
+    return len(blocks_available[file_name]) == total_blocks, file_hash
 
 
 def update_tracker(block_name):
@@ -155,17 +227,17 @@ def send_file(filename, blocks, addr):
                 print(f"ERRO AO ENVIAR BLOCO: {e}")
 
     elif filename in blocks_available:
+        for block in blocks:
+            blocks_available[filename][block] = True
 
         for block in blocks:
             block_name = filename + "_" + str(block)
             file_path = os.path.join(temp, block_name)
 
-            lock_blocks(blocks, True)
-
             with open(file_path, 'rb') as file:
                 block_data = file.read()
 
-            lock_blocks(blocks, False)
+            blocks_available[filename][block] = False
 
             message = {
                 "type": BLOCK,
@@ -223,7 +295,7 @@ def calculate_block_number(file):
     try:
         file_path = os.path.join(shared_folder, file)
         file_size = os.path.getsize(file_path)
-        total_blocks = file_size / block_size
+        total_blocks = int(file_size / block_size)
         if file_size % block_size != 0:
             total_blocks += 1
         return total_blocks

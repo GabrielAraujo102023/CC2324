@@ -9,12 +9,14 @@ from typing import Dict
 @dataclass
 class FileInfo:
     total_blocks: int
-    block_owners: dict
+    block_owners: Dict[int, list]
     file_hash: str
     available: bool
 
     def __init__(self, total_blocks, clientIP, file_hash, available=True, block_number=-1):
-        self.total_blocks = total_blocks
+        self.total_blocks = int(total_blocks)
+        self.block_owners = {}
+        block_number = int(block_number)
         if block_number >= 0:
             for i in range(0, total_blocks):
                 if i == block_number:
