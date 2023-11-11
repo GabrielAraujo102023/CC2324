@@ -127,7 +127,7 @@ def receive_block(block_name, block_data, block_hash):
 def delete_temp_blocks(temp_blocks):
     aux = temp_blocks.copy()
     file_name = ""
-    
+
     while aux:
         for block in temp_blocks:
             file_name, block_number = block.split("_")
