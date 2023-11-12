@@ -41,6 +41,11 @@ blocks_available_lock = threading.Lock()
 LOCAL_ADRRESS = ""
 TEMP_PATH = os.path.join(SHARED_FOLDER, "temp")
 BUFFER_SIZE = 1024
+block_data_acks = {}
+block_data_acks_lock = threading.Lock()
+block_request_acks = {}
+block_request_acks_lock = threading.Lock()
+TIMEOUT = 5
 
 
 def main():
@@ -73,7 +78,7 @@ def data_transfer():
         while not EXIT_FLAG:
             ready, _, _ = select.select([udp_socket], [], [], 3)
             for _ in ready:
-                pickle_message, requester_ip = udp_socket.recvfrom(BUFFER_SIZE)
+                pickle_message, peer_ip = udp_socket.recvfrom(BUFFER_SIZE)
                 try:
                     message = pickle.loads(pickle_message)
                 except pickle.UnpicklingError as e:
@@ -82,35 +87,50 @@ def data_transfer():
                     # print("MESSAGE -> " + str(message))
                     if message.type == message_types.MessageType.BLOCK_REQUEST:
                         # print(f"RECEBI UMA MENSAGEM COM UM PEDIDO DE FICHEIRO")
-                        t = threading.Thread(target=send_block, args=[message.file_name, message.blocks, requester_ip])
+                        t = threading.Thread(target=handle_block_request, args=[message.data_hash, message.file_name, message.blocks, peer_ip])
                         t.start()
-                    elif message.type == message_types.MessageType.BLOCK:
+                    elif message.type == message_types.MessageType.BLOCK_DATA:
                         # print(f"RECEBI UMA MENSAGEM COM UM FICHEIRO")
-                        t = threading.Thread(target=receive_block, args=[message.block_name, message.block_data, message.block_hash])
+                        t = threading.Thread(target=receive_block, args=[message.block_name, message.block_data, message.block_hash, peer_ip])
                         t.start()
+                    elif message.type == message_types.MessageType.BLOCK_DATA_ACK:
+                        with block_data_acks_lock:
+                            block_data_acks.update({message.block_name: message})
+                    elif message.type == message_types.MessageType.BLOCK_REQUEST_ACK:
+                        with block_request_acks_lock:
+                            block_request_acks.update({message.file_name: message})
+
     except Exception as e:
         print(f"ERRO NA PORTA UDP: {e}")
     udp_socket.close()
     print(f"PORTA UDP FECHADA")
 
 
-def receive_block(block_name, block_data, block_hash):
+def receive_block(block_name, block_data, block_hash, sender_ip):
     save_path = os.path.join(TEMP_PATH, block_name)
     global files
 
-    if calculate_block_hash(block_data) == block_hash:
+    if calculate_data_hash(block_data) == block_hash:
         print("RECEBI BEM OS BYTES DO BLOCO. AS HASHS SAO IGUAIS")
+        block_ack = message_types.BlockDataAckMessage(block_name, False)
+        udp_socket.sendto(pickle.dumps(block_ack), sender_ip)
+
         with open(save_path, 'wb') as file:
             file.write(block_data)
     else:
+        block_ack = message_types.BlockDataAckMessage(block_name, True)
+        udp_socket.sendto(pickle.dumps(block_ack), sender_ip)
         print("O BLOCO RECEBIDO É DIFERENTE DO ENVIADO MY BOY")
+        return
 
     file_name, block_number = block_name.split("_")
 
     with blocks_available_lock:
-        if file_name in blocks_available:
+        # SE JÁ TIVER O BLOCO, NAO FAÇO NADA COM ELE
+        # (CASO O GAJO ME MANDE O MESMO BLOCO MAIS QUE UMA VEZ POR CAUSA DO TIMEOUT ACONTECER)
+        if file_name in blocks_available and block_number not in blocks_available[file_name]:
             blocks_available[file_name].update({block_number: False})
-        else:
+        elif file_name not in blocks_available:
             blocks_available.update({file_name: {block_number: False}})
 
     all_blocks_available, file_hash = check_blocks_available(file_name)
@@ -141,6 +161,11 @@ def delete_temp_blocks(temp_blocks):
     os.remove(os.path.join(TEMP_PATH, file_name + "_info"))
 
 
+def sort_key(block):
+    block_name, block_number = block.split("_")
+    return block_name, int(block_number)
+
+
 def mount_file(file_name, file_hash):
     file_blocks = []
     blocks = read_sys_files(TEMP_PATH)
@@ -152,7 +177,7 @@ def mount_file(file_name, file_hash):
         else:
             file_blocks.append(block)
 
-    file_blocks = sorted(file_blocks)
+    file_blocks = sorted(file_blocks, key=sort_key)
     print(f"LISTA DE BLOCOS: {file_blocks}")
     mounted_file_path = os.path.join(SHARED_FOLDER, file_name)
 
@@ -201,45 +226,71 @@ def update_tracker(block_name):
         print(f"ERRO AO ATUALIZAR FICHEIRO NO TRACKER: {e}")
 
 
-def send_block(filename, blocks, requester_ip):
+def handle_block_request(data_hash, file_name, blocks, requester_ip):
+    if calculate_data_hash(bytes(blocks)) == data_hash:
+        block_request_ack = message_types.BlockRequestAckMessage(file_name, False)
+        udp_socket.sendto(pickle.dumps(block_request_ack), requester_ip)
+    else:
+        block_request_ack = message_types.BlockRequestAckMessage(file_name, True)
+        udp_socket.sendto(pickle.dumps(block_request_ack), requester_ip)
+        return
+
     with files_lock and blocks_available_lock:
-        if filename in files:
+        if file_name in files:
             for block in blocks:
-                block_name = filename + "_" + str(block)
-                file_path = os.path.join(SHARED_FOLDER, filename)
+                block_name = file_name + "_" + str(block)
+                file_path = os.path.join(SHARED_FOLDER, file_name)
 
                 with open(file_path, 'rb') as file:
                     file.seek(block * BLOCK_SIZE)
                     block_data = file.read(BLOCK_SIZE)
 
-                block_hash = calculate_block_hash(block_data)
-                block_message = message_types.BlockMessage(block_name, block_data, block_hash)
+                send_block(block_name, block_data, requester_ip)
 
-                try:
-                    udp_socket.sendto(pickle.dumps(block_message), requester_ip)
-                    # print(f"Ficheiro enviado")
-                except Exception as e:
-                    print(f"ERRO AO ENVIAR BLOCO: {e}")
-        elif filename in blocks_available:
+        elif file_name in blocks_available:
             for block in blocks:
-                blocks_available[filename][block] = True
+                blocks_available[file_name][block] = True
 
             for block in blocks:
-                block_name = filename + "_" + str(block)
+                block_name = file_name + "_" + str(block)
                 file_path = os.path.join(TEMP_PATH, block_name)
 
                 with open(file_path, 'rb') as file:
                     block_data = file.read()
 
-                blocks_available[filename][block] = False
+                blocks_available[file_name][block] = False
+                send_block(block_name, block_data, requester_ip)
 
-                block_hash = calculate_block_hash(block_data)
-                block_message = message_types.BlockMessage(block_name, block_data, block_hash)
 
-                try:
-                    udp_socket.sendto(pickle.dumps(block_message), requester_ip)
-                except Exception as e:
-                    print(f"ERRO AO ENVIAR BLOCO: {e}")
+def send_block(block_name, block_data, requester_ip):
+    block_hash = calculate_data_hash(block_data)
+    block_message = message_types.BlockDataMessage(block_name, block_data, block_hash)
+
+    try:
+        block_corrupted = True
+        while block_corrupted:
+            udp_socket.sendto(pickle.dumps(block_message), requester_ip)
+            start_time = time.time()
+
+            while True:
+                if time.time() - start_time > TIMEOUT:
+                    break
+
+                if block_name not in block_data_acks:
+                    continue
+                else:
+                    if not block_data_acks[block_name].corrupted:
+                        block_corrupted = False
+                        with block_data_acks_lock:
+                            del block_data_acks[block_name]
+                        break
+                    else:
+                        with block_data_acks_lock:
+                            del block_data_acks[block_name]
+                        break
+
+    except Exception as e:
+        print(f"ERRO AO ENVIAR BLOCO: {e}")
 
 
 def connect_to_tracker():
@@ -332,8 +383,7 @@ def ask_for_file():
                         file.write(file_info.file_hash + "\n" + str(file_info.total_blocks))
 
                 for client, blocks in blocks_by_client.items():
-                    block_request = message_types.BlockRequestMessage(file_name, blocks)
-                    udp_socket.sendto(pickle.dumps(block_request), (client, udp_port))
+                    send_block_request(file_name, blocks, client)
 
             else:
                 print("Ficheiro nao encontrado")
@@ -342,6 +392,37 @@ def ask_for_file():
     else:
         print("Ja possui o ficheiro pedido")
         input("Pressionar Enter para voltar ao menu...")
+
+
+def send_block_request(file_name, blocks, owner_ip):
+    data_hash = calculate_data_hash(bytes(blocks))
+    block_request_message = message_types.BlockRequestMessage(file_name, blocks, data_hash)
+
+    try:
+        data_corrupted = True
+        while data_corrupted:
+            udp_socket.sendto(pickle.dumps(block_request_message), (owner_ip, udp_port))
+            start_time = time.time()
+
+            while True:
+                if time.time() - start_time > TIMEOUT:
+                    break
+
+                if file_name not in block_request_acks:
+                    continue
+                else:
+                    if not block_request_acks[file_name].corrupted:
+                        data_corrupted = False
+                        with block_request_acks_lock:
+                            del block_request_acks[file_name]
+                        break
+                    else:
+                        with block_request_acks_lock:
+                            del block_request_acks[file_name]
+                        break
+
+    except Exception as e:
+        print(f"ERRO AO ENVIAR PEDIDO: {e}")
 
 
 def get_latency(ip):
@@ -393,7 +474,7 @@ def calculate_file_hash(file_path):
     return hasher.hexdigest()
 
 
-def calculate_block_hash(block_data):
+def calculate_data_hash(block_data):
     hasher = hashlib.sha256()
     hasher.update(block_data)
     return hasher.hexdigest()

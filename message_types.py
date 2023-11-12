@@ -2,16 +2,36 @@ from enum import Enum, auto
 
 
 class MessageType(Enum):
-    DISCONNECT = auto()
-    OWNERS = auto()
-    OWNERS_REQUEST = auto()
-    FILE_UPDATE = auto()
-    BLOCK_UPDATE = auto()
-    FILE_INFO = auto()
-    FILE_INFO_REQUEST = auto()
-    BLOCK_REQUEST = auto()
-    BLOCK = auto()
+    # Mensagens cliente -> server
     NEW_CONNECTION = auto()
+    DISCONNECT = auto()
+    OWNERS_REQUEST = auto()
+    BLOCK_UPDATE = auto()
+    FILE_INFO_REQUEST = auto()
+
+    # Mensagens server -> cliente
+    OWNERS = auto()
+    FILE_INFO = auto()
+
+    # Mensagens cliente -> cliente
+    BLOCK_DATA = auto()
+    BLOCK_DATA_ACK = auto()
+    BLOCK_REQUEST = auto()
+    BLOCK_REQUEST_ACK = auto()
+
+
+class BlockRequestAckMessage:
+    def __init__(self, file_name, corrupted):
+        self.type = MessageType.BLOCK_REQUEST_ACK
+        self.file_name = file_name
+        self.corrupted = corrupted
+
+
+class BlockDataAckMessage:
+    def __init__(self, block_name, corrupted):
+        self.type = MessageType.BLOCK_DATA_ACK
+        self.block_name = block_name
+        self.corrupted = corrupted
 
 
 class NewConnectionMessage:
@@ -21,9 +41,9 @@ class NewConnectionMessage:
         self.blocks_info = blocks_info
 
 
-class BlockMessage:
+class BlockDataMessage:
     def __init__(self, block_name, block_data, block_hash):
-        self.type = MessageType.BLOCK
+        self.type = MessageType.BLOCK_DATA
         self.block_name = block_name
         self.block_data = block_data
         self.block_hash = block_hash
@@ -44,13 +64,6 @@ class OwnersMessage:
 class DisconnectMessage:
     def __init__(self):
         self.type = MessageType.DISCONNECT
-
-        
-class FileUpdateMessage:
-    def __init__(self, filename, clientIP):
-        self.type = MessageType.FILE_UPDATE
-        self.filename = filename
-        self.clientIP = clientIP
 
 
 class BlockUpdateMessage:
@@ -73,7 +86,8 @@ class FileInfoRequestMessage:
 
 
 class BlockRequestMessage:
-    def __init__(self, file_name, blocks):
+    def __init__(self, file_name, blocks, data_hash):
         self.type = MessageType.BLOCK_REQUEST
         self.file_name = file_name
         self.blocks = blocks
+        self.data_hash = data_hash

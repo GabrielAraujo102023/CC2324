@@ -48,7 +48,7 @@ class FileInfo:
 
 files: Dict[str, FileInfo] = {}
 files_lock = threading.Lock()
-CLEANUP_INTERVAL = 5
+CLEANUP_INTERVAL = 15
 
 
 def cleanup():
@@ -117,7 +117,6 @@ def connection_thread(client_socket, client_ip):
                     client_socket.send(pickle.dumps(response))
                 elif message.type == message_types.MessageType.BLOCK_UPDATE:
                     update_file_info(message.block_name, client_ip)
-                    continue
                 elif message.type == message_types.MessageType.FILE_INFO_REQUEST:
                     file_name = message.file_name
                     response = message_types.FileInfoMessage(files[file_name].file_hash, files[file_name].total_blocks)
