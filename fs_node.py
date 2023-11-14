@@ -157,14 +157,6 @@ def receive_block(block_name, block_data, block_hash, sender_ip):
         elif file_name not in blocks_available:
             blocks_available.update({file_name: {int(block_number): False}})
 
-    """all_blocks_available, file_hash = check_blocks_available(file_name)
-
-    if all_blocks_available:
-        temp_blocks = mount_file(file_name, file_hash)
-        files = read_sys_files(SHARED_FOLDER, False)
-        update_tracker(block_name)
-        delete_temp_blocks(temp_blocks)
-    else:"""
     update_tracker(block_name)
 
 
