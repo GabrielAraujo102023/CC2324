@@ -99,22 +99,31 @@ def connection_thread(client_socket, client_ip):
     try:
         while True:
             pickle_message = client_socket.recv(1024)
+
             if not pickle_message:
                 break
             try:
                 message = pickle.loads(pickle_message)
+
             except pickle.UnpicklingError as e:
                 print(f"Erro a converter mensagem recebida: {e}")
+
             else:
                 print("message -> " + str(message))
                 if message.type == message_types.MessageType.OWNERS_REQUEST:
-                    owners = {}
+                    owners_list = {}
                     file_name = message.file_name
                     if file_name in files and files[file_name].available:
-                        owners = files[file_name].block_owners.copy()
-                        print(owners)
-                    response = message_types.OwnersMessage(owners)
+                        for block_number, owners in files[file_name].block_owners.items():
+                            for owner in owners:
+                                if owner not in owners_list:
+                                    owners_list[owner] = [block_number]
+                                else:
+                                    owners_list[owner].append(block_number)
+
+                    response = message_types.OwnersMessage(owners_list)
                     client_socket.send(pickle.dumps(response))
+
                 elif message.type == message_types.MessageType.BLOCK_UPDATE:
                     update_file_info(message.block_name, client_ip)
                 elif message.type == message_types.MessageType.FILE_INFO_REQUEST:

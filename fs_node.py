@@ -1,30 +1,41 @@
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import socket
 import threading
 import re
 import time
-from typing import Dict, List
+from typing import Dict
 import select
 import message_types
 import pickle
 
 files_lock = threading.Lock()
+SHARED_FOLDER = sys.argv[1]
+TEMP_PATH = os.path.join(SHARED_FOLDER, "temp")
 
 
-def read_sys_files(folder):
+def read_sys_files(folder, startup):
     with files_lock:
         sys_files = []
-        for _, _, filenames in os.walk(folder):
-            for file in filenames:
-                sys_files.append(file)
-        return sys_files
+        for filename in os.listdir(folder):
+            file_path = os.path.join(folder, filename)
+            if os.path.isfile(file_path):
+                sys_files.append(filename)
+
+    # LIMPA BLOCOS POTENCIALMENTE CORROMPIDOS
+    if startup and os.path.exists(TEMP_PATH):
+        for _, _, sys_blocks in os.walk(TEMP_PATH):
+            for block in sys_blocks:
+                if "temp" in block:
+                    os.remove(os.path.join(TEMP_PATH, block))
+
+    return sys_files
 
 
 os.environ['TERM'] = 'xterm'
-SHARED_FOLDER = sys.argv[1]
 tracker_ip = sys.argv[2]
 tracker_port = 9090
 if len(sys.argv) == 4:
@@ -34,18 +45,19 @@ tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 EXIT_FLAG = False
 BLOCK_SIZE = 512
-files = read_sys_files(SHARED_FOLDER)
+files = read_sys_files(SHARED_FOLDER, True)
+files_lock = threading.Lock()
 # blocks_available: {"filename": {blocknumber: bool}}
 blocks_available: Dict[str, Dict[int, bool]] = {}
 blocks_available_lock = threading.Lock()
 LOCAL_ADRRESS = ""
-TEMP_PATH = os.path.join(SHARED_FOLDER, "temp")
 BUFFER_SIZE = 1024
 block_data_acks = {}
 block_data_acks_lock = threading.Lock()
 block_request_acks = {}
 block_request_acks_lock = threading.Lock()
-TIMEOUT = 5
+TIMEOUT = 2
+MAX_TIMEOUTS = 3
 
 
 def main():
@@ -60,7 +72,8 @@ def main():
               "Escolha:")
         choice = input()
         if choice == "1":
-            ask_for_file()
+            file_name = input("Que ficheiro quer?: ")
+            find_file(file_name)
         elif choice == "2":
             disconnect()
 
@@ -87,11 +100,13 @@ def data_transfer():
                     # print("MESSAGE -> " + str(message))
                     if message.type == message_types.MessageType.BLOCK_REQUEST:
                         # print(f"RECEBI UMA MENSAGEM COM UM PEDIDO DE FICHEIRO")
-                        t = threading.Thread(target=handle_block_request, args=[message.data_hash, message.file_name, message.blocks, peer_ip])
+                        t = threading.Thread(target=handle_block_request,
+                                             args=[message.data_hash, message.file_name, message.blocks, peer_ip])
                         t.start()
                     elif message.type == message_types.MessageType.BLOCK_DATA:
                         # print(f"RECEBI UMA MENSAGEM COM UM FICHEIRO")
-                        t = threading.Thread(target=receive_block, args=[message.block_name, message.block_data, message.block_hash, peer_ip])
+                        t = threading.Thread(target=receive_block,
+                                             args=[message.block_name, message.block_data, message.block_hash, peer_ip])
                         t.start()
                     elif message.type == message_types.MessageType.BLOCK_DATA_ACK:
                         with block_data_acks_lock:
@@ -107,21 +122,30 @@ def data_transfer():
 
 
 def receive_block(block_name, block_data, block_hash, sender_ip):
-    save_path = os.path.join(TEMP_PATH, block_name)
-    global files
 
-    if calculate_data_hash(block_data) == block_hash:
-        print("RECEBI BEM OS BYTES DO BLOCO. AS HASHS SAO IGUAIS")
-        block_ack = message_types.BlockDataAckMessage(block_name, False)
-        udp_socket.sendto(pickle.dumps(block_ack), sender_ip)
-
-        with open(save_path, 'wb') as file:
-            file.write(block_data)
-    else:
+    if calculate_data_hash(block_data) != block_hash:
         block_ack = message_types.BlockDataAckMessage(block_name, True)
         udp_socket.sendto(pickle.dumps(block_ack), sender_ip)
         print("O BLOCO RECEBIDO É DIFERENTE DO ENVIADO MY BOY")
         return
+    else:
+        print("RECEBI BEM OS BYTES DO BLOCO. AS HASHS SAO IGUAIS")
+        block_ack = message_types.BlockDataAckMessage(block_name, False)
+        udp_socket.sendto(pickle.dumps(block_ack), sender_ip)
+
+    save_path_temp = os.path.join(TEMP_PATH, block_name + "temp")
+    save_path_final = os.path.join(TEMP_PATH, block_name)
+    global files
+
+    corrupted = True
+    while corrupted:
+        with open(save_path_temp, 'wb') as file:
+            file.write(block_data)
+        if calculate_file_hash(save_path_temp) == block_hash:
+            corrupted = False
+
+    # EVITA QUE O BLOCO SEJA CORROMPIDO AO MOVÊ-LO PARA O CAMINHO FINAL POIS É UMA OPERAÇÃO ATÓMICA
+    shutil.move(save_path_temp, save_path_final)
 
     file_name, block_number = block_name.split("_")
 
@@ -129,19 +153,19 @@ def receive_block(block_name, block_data, block_hash, sender_ip):
         # SE JÁ TIVER O BLOCO, NAO FAÇO NADA COM ELE
         # (CASO O GAJO ME MANDE O MESMO BLOCO MAIS QUE UMA VEZ POR CAUSA DO TIMEOUT ACONTECER)
         if file_name in blocks_available and block_number not in blocks_available[file_name]:
-            blocks_available[file_name].update({block_number: False})
+            blocks_available[file_name].update({int(block_number): False})
         elif file_name not in blocks_available:
-            blocks_available.update({file_name: {block_number: False}})
+            blocks_available.update({file_name: {int(block_number): False}})
 
-    all_blocks_available, file_hash = check_blocks_available(file_name)
+    """all_blocks_available, file_hash = check_blocks_available(file_name)
 
     if all_blocks_available:
         temp_blocks = mount_file(file_name, file_hash)
-        files = read_sys_files(SHARED_FOLDER)
+        files = read_sys_files(SHARED_FOLDER, False)
         update_tracker(block_name)
         delete_temp_blocks(temp_blocks)
-    else:
-        update_tracker(block_name)
+    else:"""
+    update_tracker(block_name)
 
 
 def delete_temp_blocks(temp_blocks):
@@ -151,7 +175,7 @@ def delete_temp_blocks(temp_blocks):
     while aux:
         for block in temp_blocks:
             file_name, block_number = block.split("_")
-            if blocks_available[file_name][block_number]:
+            if blocks_available[file_name][int(block_number)]:
                 continue
             else:
                 block_path = os.path.join(TEMP_PATH, block)
@@ -168,7 +192,7 @@ def sort_key(block):
 
 def mount_file(file_name, file_hash):
     file_blocks = []
-    blocks = read_sys_files(TEMP_PATH)
+    blocks = read_sys_files(TEMP_PATH, False)
 
     for block in blocks:
         block_name, block_number = block.split("_")
@@ -208,15 +232,6 @@ def mount_file(file_name, file_hash):
     return file_blocks
 
 
-def check_blocks_available(file_name):
-    file_path = os.path.join(TEMP_PATH, file_name + "_info")
-    with open(file_path, 'r') as file_info:
-        file_hash = file_info.readline().strip()
-        total_blocks = int(file_info.readline())
-    with blocks_available_lock:
-        return len(blocks_available[file_name]) == total_blocks, file_hash
-
-
 def update_tracker(block_name):
     block_update = message_types.BlockUpdateMessage(block_name)
 
@@ -235,19 +250,19 @@ def handle_block_request(data_hash, file_name, blocks, requester_ip):
         udp_socket.sendto(pickle.dumps(block_request_ack), requester_ip)
         return
 
-    with files_lock and blocks_available_lock:
-        if file_name in files:
-            for block in blocks:
-                block_name = file_name + "_" + str(block)
-                file_path = os.path.join(SHARED_FOLDER, file_name)
+    if file_name in files:
+        for block in blocks:
+            block_name = file_name + "_" + str(block)
+            file_path = os.path.join(SHARED_FOLDER, file_name)
 
-                with open(file_path, 'rb') as file:
-                    file.seek(block * BLOCK_SIZE)
-                    block_data = file.read(BLOCK_SIZE)
+            with open(file_path, 'rb') as file:
+                file.seek(block * BLOCK_SIZE)
+                block_data = file.read(BLOCK_SIZE)
 
-                send_block(block_name, block_data, requester_ip)
+            send_block(block_name, block_data, requester_ip)
 
-        elif file_name in blocks_available:
+    elif file_name in blocks_available:
+        with blocks_available_lock:
             for block in blocks:
                 blocks_available[file_name][block] = True
 
@@ -343,48 +358,20 @@ def calculate_blocks_number(file):
         print(f"ERRO A CALCULAR NUMERO DE BLOCOS DO FICHEIRO: {e}")
 
 
-def ask_for_file():
-    file_name = input("Que ficheiro quer?: ")
+def find_file(file_name):
     if file_name not in files:
         owners_request = message_types.OwnersRequestMessage(file_name)
         tcp_socket.send(pickle.dumps(owners_request))
         pickle_message = tcp_socket.recv(BUFFER_SIZE)
         try:
-            owners_by_block = pickle.loads(pickle_message).owners
+            blocks_by_owner = pickle.loads(pickle_message).owners
         except pickle.UnpicklingError as e:
             print(f"Erro a converter mensagem recebida: {e}")
         else:
-            if owners_by_block:
-                print("Bloco do ficheiro -> Lista de clientes que o possui:")
-                # {IP: [BLOCOS]}
-                blocks_by_client: Dict[str, List[int]] = {}
-                for block, clients in owners_by_block.items():
-                    with blocks_available_lock:
-                        if file_name in blocks_available and block in blocks_available[file_name]:
-                            continue
-                        print(f"{block} -> {clients}")
-                        best_client = choose_best_client(clients)
-                        if best_client not in blocks_by_client.keys():
-                            blocks_by_client.update({best_client: [block]})
-                        else:
-                            blocks_by_client[best_client].append(block)
-
-                input("Pressionar Enter para comecar transferencia...")
-                file_info_request = message_types.FileInfoRequestMessage(file_name)
-                tcp_socket.send(pickle.dumps(file_info_request))
-                pickle_message = tcp_socket.recv(BUFFER_SIZE)
-                try:
-                    file_info = pickle.loads(pickle_message)
-                except pickle.UnpicklingError as e:
-                    print(f"Erro a converter mensagem recebida: {e}")
-                else:
-                    file_info_path = os.path.join(TEMP_PATH, (file_name + "_info"))
-                    with open(file_info_path, 'w') as file:
-                        file.write(file_info.file_hash + "\n" + str(file_info.total_blocks))
-
-                for client, blocks in blocks_by_client.items():
-                    send_block_request(file_name, blocks, client)
-
+            if blocks_by_owner:
+                transfer_thread = threading.Thread(target=transfer_file, args=[file_name, blocks_by_owner])
+                transfer_thread.daemon = True
+                transfer_thread.start()
             else:
                 print("Ficheiro nao encontrado")
                 input("Pressionar Enter para voltar ao menu...")
@@ -394,9 +381,123 @@ def ask_for_file():
         input("Pressionar Enter para voltar ao menu...")
 
 
+def transfer_file(file_name, blocks_by_owner):
+    # LISTA DE OWNERS ORDENADA POR VELOCIDADE DE LIGAÇÃO
+    print("A recolher informação sobre o ficheiro. Aguarde...")
+    latency_by_owner = {owner: get_latency(owner) for owner in blocks_by_owner}
+    print("JA RECOLHI A INFROMADSADSASDAWQEEWQWEQWQEQFDFDDFSSDF")
+
+    blocks_by_owner_sorted = dict(sorted(blocks_by_owner.items(), key=lambda item: latency_by_owner[item[0]]))
+    print("JA DEI SORT A LISTA ADSADSADSAWQEEWQQWFSVXC")
+
+    print("Transferencia vai começar dentro de 3 segundos...")
+    time.sleep(3)
+    print("Transferencia iniciada")
+
+    # VERIFICO SE JÁ TENHO INFORMAÇÃO SOBRE O FICHEIRO QUE VOU TRANSFERIR
+    # SE JÁ TIVER, TENHO QUE VER QUE BLOCOS É QUE JÁ TENHO PARA NOS OS PEDIR OUTRA VEZ
+    # SE NÃO TIVER, PEÇO INFORMAÇÃO SOBRE O FICHEIRO
+
+    blocks_owned = []
+    total_blocks = []
+    file_hash = ""
+    global files
+    if os.path.exists(os.path.join(TEMP_PATH, file_name + "_info")):
+        with blocks_available_lock:
+            blocks_owned = list(blocks_available[file_name].keys())
+    else:
+        file_info_request = message_types.FileInfoRequestMessage(file_name)
+        tcp_socket.send(pickle.dumps(file_info_request))
+        pickle_message = tcp_socket.recv(BUFFER_SIZE)
+        try:
+            file_info = pickle.loads(pickle_message)
+        except pickle.UnpicklingError as e:
+            print(f"Erro a converter mensagem recebida: {e}")
+        else:
+            total_blocks = list(range(file_info.total_blocks))
+            file_hash = file_info.file_hash
+            file_info_temp = os.path.join(TEMP_PATH, file_name + "_infotemp")
+            file_info_final = os.path.join(TEMP_PATH, file_name + "_info")
+
+            with open(file_info_temp, 'w') as file:
+                file.write(file_info.file_hash + "\n" + str(file_info.total_blocks))
+
+            shutil.move(file_info_temp, file_info_final)
+    print("0000000000000000000000000000")
+    # RETIRO DA LISTA OS BLOCOS QUE JÁ TENHO
+    blocks_needed = [block for block in total_blocks if block not in blocks_owned]
+    print("BLOCKS NEEDED")
+    print(blocks_needed)
+    blocks_to_request = blocks_needed.copy()
+    print("BLOCKS TO REQUEST")
+    print(blocks_to_request)
+    total_latency = sum(latency_by_owner.values())
+    print(f"total latency = {total_latency}")
+    owners = list(blocks_by_owner_sorted.keys())
+    print("OWNERS")
+    print(owners)
+    max_blocks_to_request = 5
+    missing_block = False
+
+    while blocks_needed and not missing_block:
+        for block in blocks_needed:
+            if not any(block in blocks for blocks in blocks_by_owner.values()):
+                missing_block = True
+                print("FALHEI LOGO NO PRIMEIRO IF")
+                break
+        if missing_block:
+            print("FICHEIRO COMPLETO INDISPONIVEL NA REDE")
+            break
+
+        # DISTRIBUI PEDIDOS DOS BLOCOS NECESSÁRIOS PELOS VÁRIOS OWNERS ATÉ TER PEDIDO TODOS OS BLOCOS
+        while blocks_to_request:
+            # for owner, blocks in blocks_by_owner_sorted.items():
+            print("ENTREI NO WHILE BLOCKS_TO_REQUEST")
+            for owner in owners:
+                blocks = blocks_by_owner_sorted[owner]
+                blocks_to_request_from_owner = list(set(blocks) & set(blocks_to_request))
+
+                if blocks_to_request_from_owner:
+                    owner_latency = latency_by_owner[owner]
+                    proportion_of_blocks = (total_latency - owner_latency) / total_latency
+                    # O MAX EVITA QUE SE PEÇAM OS BLOCOS TODOS A UM MUITO MAIS RÁPIDO QUE TENHA TODOS OS BLOCOS
+                    num_blocks_to_request = max(1, min(int(proportion_of_blocks *
+                                                           len(blocks_to_request_from_owner)), max_blocks_to_request))
+                    blocks_to_request_from_owner = blocks_to_request_from_owner[:num_blocks_to_request]
+
+                    success = send_block_request(file_name, blocks_to_request_from_owner, owner)
+                    blocks_by_owner[owner] = [block for block in blocks if block not in blocks_to_request_from_owner]
+
+                    if success:
+                        blocks_to_request = [block for block in blocks_to_request if
+                                             block not in blocks_to_request_from_owner]
+                        print("ELE RECEBEU O PEDIDO")
+
+        print("PEDI OS BLOCOS TODOS PELA PRIMEIRA VEZ")
+        tries = 0
+        while tries < MAX_TIMEOUTS:
+            print("ESTOU NO WHILE DAS TRIES")
+            time.sleep(TIMEOUT + 1)
+            if blocks_available[file_name]:
+                blocks_received = list(blocks_available[file_name].keys())
+                print(f"BLOCKS_RECEIVED: {blocks_received}")
+                blocks_needed = [block for block in blocks_needed if block not in blocks_received]
+                print(f"BLOCKS_NEEDED: {blocks_needed}")
+            if blocks_needed:
+                tries += 1
+            else:
+                temp_blocks = mount_file(file_name, file_hash)
+                files = read_sys_files(SHARED_FOLDER, False)
+                delete_temp_blocks(temp_blocks)
+                break
+
+    print("TRANSFERENCIA FOI UM SUCESSO")
+
+
 def send_block_request(file_name, blocks, owner_ip):
     data_hash = calculate_data_hash(bytes(blocks))
     block_request_message = message_types.BlockRequestMessage(file_name, blocks, data_hash)
+    timeouts_count = 0
 
     try:
         data_corrupted = True
@@ -406,6 +507,10 @@ def send_block_request(file_name, blocks, owner_ip):
 
             while True:
                 if time.time() - start_time > TIMEOUT:
+                    timeouts_count += 1
+                    if timeouts_count >= MAX_TIMEOUTS:
+                        print("ATINGIU O MAX DE TIMEOUTS")
+                        return False
                     break
 
                 if file_name not in block_request_acks:
@@ -424,6 +529,8 @@ def send_block_request(file_name, blocks, owner_ip):
     except Exception as e:
         print(f"ERRO AO ENVIAR PEDIDO: {e}")
 
+    return True
+
 
 def get_latency(ip):
     # Utiliza pings para verificar velocidade de conexão
@@ -441,13 +548,6 @@ def get_latency(ip):
 
     # Em caso de erro
     return -1
-
-
-def choose_best_client(ip_list):
-    # Ordena IPs por velocidade de conexão
-    sorted_ips = sorted(ip_list, key=get_latency)
-    print("sorted ips = " + str(sorted_ips))
-    return sorted_ips[0]
 
 
 def disconnect():
