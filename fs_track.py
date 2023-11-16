@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Dict
 import message_types
 import pickle
+from dns import contact_dns
 
 
 @dataclass
@@ -49,6 +50,8 @@ class FileInfo:
 files: Dict[str, FileInfo] = {}
 files_lock = threading.Lock()
 CLEANUP_INTERVAL = 15
+udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+names = {}
 
 
 def cleanup():
@@ -75,6 +78,8 @@ def main():
     tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     HOST, _ = tcp_socket.getsockname()
     PORT = 9090
+    udp_socket.bind(('', 9091))
+    contact_dns(socket.gethostname(), udp_socket, [], '')
     if len(sys.argv) == 2:  # Verifica se usa um Port costumizadoo
         PORT = int(sys.argv[1])
     tcp_socket.bind((HOST, PORT))
@@ -115,7 +120,8 @@ def connection_thread(client_socket, client_ip):
                     file_name = message.file_name
                     if file_name in files and files[file_name].available:
                         for block_number, owners in files[file_name].block_owners.items():
-                            for owner in owners:
+                            for o in owners:
+                                owner = names[o]
                                 if owner not in owners_list:
                                     owners_list[owner] = [block_number]
                                 else:
@@ -131,7 +137,7 @@ def connection_thread(client_socket, client_ip):
                     response = message_types.FileInfoMessage(files[file_name].file_hash, files[file_name].total_blocks)
                     client_socket.send(pickle.dumps(response))
                 elif message.type == message_types.MessageType.NEW_CONNECTION:
-                    new_connection_info(message.files_info, message.blocks_info, client_ip)
+                    new_connection_info(message.files_info, message.blocks_info, client_ip, message.node_name)
                 elif message.type == message_types.MessageType.DISCONNECT:
                     try:
                         client_socket.shutdown(socket.SHUT_RDWR)
@@ -156,7 +162,8 @@ def connection_thread(client_socket, client_ip):
             print(files)
 
 
-def new_connection_info(files_info, blocks_info, client_ip):
+def new_connection_info(files_info, blocks_info, client_ip, node_name):
+    names[client_ip] = node_name
     with files_lock:
         if files_info:
             for file, total_blocks, file_hash in files_info:

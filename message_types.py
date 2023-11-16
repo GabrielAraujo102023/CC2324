@@ -19,6 +19,10 @@ class MessageType(Enum):
     BLOCK_REQUEST = auto()
     BLOCK_REQUEST_ACK = auto()
 
+    # Mensagens DNS
+    DNS_REQUEST = auto()
+    DNS_REPLY = auto()
+
 
 class BlockRequestAckMessage:
     def __init__(self, file_name, corrupted):
@@ -35,18 +39,20 @@ class BlockDataAckMessage:
 
 
 class NewConnectionMessage:
-    def __init__(self, files_info, blocks_info):
+    def __init__(self, files_info, blocks_info, node_name):
         self.type = MessageType.NEW_CONNECTION
         self.files_info = files_info
         self.blocks_info = blocks_info
+        self.node_name = node_name
 
 
 class BlockDataMessage:
-    def __init__(self, block_name, block_data, block_hash):
+    def __init__(self, block_name, block_data, block_hash, peer_name):
         self.type = MessageType.BLOCK_DATA
         self.block_name = block_name
         self.block_data = block_data
         self.block_hash = block_hash
+        self.peer_name = peer_name
 
 
 class OwnersRequestMessage:
@@ -86,8 +92,28 @@ class FileInfoRequestMessage:
 
 
 class BlockRequestMessage:
-    def __init__(self, file_name, blocks, data_hash):
+    def __init__(self, file_name, blocks, data_hash, peer_name):
         self.type = MessageType.BLOCK_REQUEST
         self.file_name = file_name
         self.blocks = blocks
         self.data_hash = data_hash
+        self.peer_name = peer_name
+
+
+class DnsRequest:
+    def __init__(self, sender_name, requests, reply_token):
+        self.type = MessageType.DNS_REQUEST
+        self.sender_name = sender_name
+        self.requests = requests
+        self.reply_token = reply_token
+
+
+class DnsReply:
+    def __init__(self, reply_token, ips):
+        self.type = MessageType.DNS_REPLY
+
+        # reply_token é usado para identificar o uso da reply por quem a recebe. No nosso contexto, vai ser usado para
+        # identificar se a mensagem recebida é relacionada a um pedido de transferência ('transf'), ou a um pedido de
+        # blocos de outro nodo (nome desse nodo)
+        self.reply_token = reply_token
+        self.ips = ips

@@ -11,6 +11,11 @@ from typing import Dict
 import select
 import message_types
 import pickle
+from dns import contact_dns
+
+if len(sys.argv) < 3 or len(sys.argv) > 4:
+    print("Usage: FS_Node <share_folder> <server_name> <port>")
+    sys.exit(1)
 
 files_lock = threading.Lock()
 SHARED_FOLDER = sys.argv[1]
@@ -36,7 +41,8 @@ def read_sys_files(folder, startup):
 
 
 os.environ['TERM'] = 'xterm'
-tracker_ip = sys.argv[2]
+SHARED_FOLDER = sys.argv[1]
+tracker_name = sys.argv[2]
 tracker_port = 9090
 if len(sys.argv) == 4:
     tracker_port = sys.argv[3]
@@ -56,13 +62,18 @@ block_data_acks = {}
 block_data_acks_lock = threading.Lock()
 block_request_acks = {}
 block_request_acks_lock = threading.Lock()
+dns_replies = {}
+dns_replies_lock = threading.Lock()
+DNS_REPLY_TRANSF_TOKEN = 'transf'
 TIMEOUT = 2
 MAX_TIMEOUTS = 3
+MY_NAME = socket.gethostname()
 
 
 def main():
     data_transfer_thread = threading.Thread(target=data_transfer)
     data_transfer_thread.start()
+    udp_socket.bind((LOCAL_ADRRESS, udp_port))
     connect_to_tracker()
 
     while not EXIT_FLAG:
@@ -85,7 +96,6 @@ def data_transfer():
     global LOCAL_ADRRESS
     try:
         LOCAL_ADRRESS, _ = udp_socket.getsockname()
-        udp_socket.bind((LOCAL_ADRRESS, udp_port))
         print(f"FS Transfer Protocol: à escuta em {LOCAL_ADRRESS} na porta UDP {udp_port} ")
 
         while not EXIT_FLAG:
@@ -99,26 +109,36 @@ def data_transfer():
                 else:
                     # print("MESSAGE -> " + str(message))
                     if message.type == message_types.MessageType.BLOCK_REQUEST:
-                        # print(f"RECEBI UMA MENSAGEM COM UM PEDIDO DE FICHEIRO")
-                        t = threading.Thread(target=handle_block_request,
-                                             args=[message.data_hash, message.file_name, message.blocks, peer_ip])
-                        t.start()
+                        threading.Thread(target=get_ips_to_handle_request, args=[message]).start()
                     elif message.type == message_types.MessageType.BLOCK_DATA:
-                        # print(f"RECEBI UMA MENSAGEM COM UM FICHEIRO")
-                        t = threading.Thread(target=receive_block,
-                                             args=[message.block_name, message.block_data, message.block_hash, peer_ip])
-                        t.start()
+                        threading.Thread(target=get_ips_tp_receive_block, args=[message]).start()
                     elif message.type == message_types.MessageType.BLOCK_DATA_ACK:
                         with block_data_acks_lock:
                             block_data_acks.update({message.block_name: message})
                     elif message.type == message_types.MessageType.BLOCK_REQUEST_ACK:
                         with block_request_acks_lock:
                             block_request_acks.update({message.file_name: message})
+                    elif message.type == message_types.MessageType.DNS_REPLY:
+                        with dns_replies_lock:
+                            dns_replies.update({message.reply_token: message})
 
     except Exception as e:
         print(f"ERRO NA PORTA UDP: {e}")
     udp_socket.close()
     print(f"PORTA UDP FECHADA")
+
+
+def get_ips_to_handle_request(message):
+    print(f"RECEBI UMA MENSAGEM COM UM PEDIDO DE FICHEIRO")
+    ips = get_ips_from_dns([message.peer_name])
+    print("JA FIZ O PEDIDO DOS IPS")
+    handle_block_request(message.data_hash, message.file_name, message.blocks, (ips[0], udp_port))
+
+
+def get_ips_tp_receive_block(message):
+    ips = get_ips_from_dns([message.peer_name])
+    # print(f"RECEBI UMA MENSAGEM COM UM FICHEIRO")
+    receive_block(message.block_name, message.block_data, message.block_hash, (ips[0], udp_port))
 
 
 def receive_block(block_name, block_data, block_hash, sender_ip):
@@ -234,6 +254,7 @@ def update_tracker(block_name):
 
 
 def handle_block_request(data_hash, file_name, blocks, requester_ip):
+    print("RECEBIRECEBIRECEBIRECEBI")
     if calculate_data_hash(bytes(blocks)) == data_hash:
         block_request_ack = message_types.BlockRequestAckMessage(file_name, False)
         udp_socket.sendto(pickle.dumps(block_request_ack), requester_ip)
@@ -271,7 +292,7 @@ def handle_block_request(data_hash, file_name, blocks, requester_ip):
 
 def send_block(block_name, block_data, requester_ip):
     block_hash = calculate_data_hash(block_data)
-    block_message = message_types.BlockDataMessage(block_name, block_data, block_hash)
+    block_message = message_types.BlockDataMessage(block_name, block_data, block_hash, MY_NAME)
 
     try:
         block_corrupted = True
@@ -301,6 +322,7 @@ def send_block(block_name, block_data, requester_ip):
 
 
 def connect_to_tracker():
+    tracker_ip = get_ips_from_dns([tracker_name])[0]
     try:
         tcp_socket.connect((tracker_ip, int(tracker_port)))
         files_info = []
@@ -330,7 +352,7 @@ def connect_to_tracker():
         else:
             os.makedirs(TEMP_PATH)
 
-        new_connection = message_types.NewConnectionMessage(files_info, blocks_info)
+        new_connection = message_types.NewConnectionMessage(files_info, blocks_info, MY_NAME)
         tcp_socket.send(pickle.dumps(new_connection))
         print("Conexão FS Track Protocol com servidor " + tracker_ip + " porta " + str(tracker_port))
 
@@ -373,12 +395,19 @@ def find_file(file_name):
         input("Pressionar Enter para voltar ao menu...")
 
 
-def transfer_file(file_name, blocks_by_owner):
+def transfer_file(file_name, blocks_by_owner_name):
+    # Traduz nomes em IPs
+    values = list(blocks_by_owner_name.values())
+    print("ANTES DE FALAR COM DNS")
+    print("LIST IS " + str(list(blocks_by_owner_name.keys())))
+    ips = get_ips_from_dns(list(blocks_by_owner_name.keys()))
+    print("IPS = " + str(ips))
+    blocks_by_owner = {ips[i]: values[i] for i in range(len(ips))}
+
     # LISTA DE OWNERS ORDENADA POR VELOCIDADE DE LIGAÇÃO
     print("A recolher informação sobre o ficheiro. Aguarde...")
     latency_by_owner = {owner: get_latency(owner) for owner in blocks_by_owner}
     print("JA RECOLHI A INFROMADSADSASDAWQEEWQWEQWQEQFDFDDFSSDF")
-
     blocks_by_owner_sorted = dict(sorted(blocks_by_owner.items(), key=lambda item: latency_by_owner[item[0]]))
     print("JA DEI SORT A LISTA ADSADSADSAWQEEWQQWFSVXC")
 
@@ -488,12 +517,13 @@ def transfer_file(file_name, blocks_by_owner):
 
 def send_block_request(file_name, blocks, owner_ip):
     data_hash = calculate_data_hash(bytes(blocks))
-    block_request_message = message_types.BlockRequestMessage(file_name, blocks, data_hash)
+    block_request_message = message_types.BlockRequestMessage(file_name, blocks, data_hash, MY_NAME)
     timeouts_count = 0
 
     try:
         data_corrupted = True
         while data_corrupted:
+            print("OWNER IP IS " + owner_ip)
             udp_socket.sendto(pickle.dumps(block_request_message), (owner_ip, udp_port))
             start_time = time.time()
 
@@ -572,8 +602,24 @@ def calculate_data_hash(block_data):
     return hasher.hexdigest()
 
 
+def get_ips_from_dns(requested_ips):
+    reply_token: str
+    if len(requested_ips) == 1:
+        reply_token = requested_ips[0]
+    else:
+        reply_token = DNS_REPLY_TRANSF_TOKEN
+
+    contact_dns(MY_NAME, udp_socket, requested_ips, reply_token)
+    ips = []
+    while True:
+        if reply_token not in dns_replies:
+            continue
+        ips = dns_replies[reply_token].ips
+        with dns_replies_lock:
+            del dns_replies[reply_token]
+        break
+    return ips
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 3 or len(sys.argv) > 4:
-        print("Usage: FS_Node <share_folder> <server_address> <port>")
-        sys.exit(1)
     main()
