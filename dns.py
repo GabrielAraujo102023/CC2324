@@ -7,7 +7,7 @@ import pickle
 
 BUFFER_SIZE = 1024
 names = {}
-TIME_TO_LIVE = 21
+TIME_TO_LIVE = 1
 UPDATE_TIMER = 20
 dns_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 lock = threading.Lock()
@@ -38,6 +38,9 @@ def reply_task(pickle_msg, ip, port):
                     replies = []
                     for request in message.requests:
                         print("he wants " + request)
+                        if request not in names:
+                            print(request + " não está registado.")
+                            continue
                         (req, _) = names[request]
                         names[request] = (req, TIME_TO_LIVE)
                         replies.append(req)
@@ -50,14 +53,18 @@ def reply_task(pickle_msg, ip, port):
 def update_task():
     while True:
         time.sleep(UPDATE_TIMER)
+        to_remove = []
         with lock:
             dict_iter = iter(names.items())
             for _ in names:
                 name, (ip, timer) = next(dict_iter)
                 if timer == 0:
-                    names.pop(name)
+                    to_remove.append(name)
                 else:
                     names[name] = (ip, timer - 1)
+            for name in to_remove:
+                names.pop(name)
+                print("removi " + name)
 
 
 if __name__ == "__main__":

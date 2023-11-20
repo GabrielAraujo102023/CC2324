@@ -132,13 +132,18 @@ def get_ips_to_handle_request(message):
     print(f"RECEBI UMA MENSAGEM COM UM PEDIDO DE FICHEIRO")
     ips = get_ips_from_dns([message.peer_name])
     print("JA FIZ O PEDIDO DOS IPS")
-    handle_block_request(message.data_hash, message.file_name, message.blocks, (ips[0], udp_port))
+    if len(ips) == 0:
+        print("Não foi possível resolver o nome do pedido de ficheiro")
+    else:
+        handle_block_request(message.data_hash, message.file_name, message.blocks, (ips[0], udp_port))
 
 
 def get_ips_tp_receive_block(message):
     ips = get_ips_from_dns([message.peer_name])
-    # print(f"RECEBI UMA MENSAGEM COM UM FICHEIRO")
-    receive_block(message.block_name, message.block_data, message.block_hash, (ips[0], udp_port))
+    if len(ips) == 0:
+        print("Não foi possível resolver o nome para receber ficheiro")
+    else:
+        receive_block(message.block_name, message.block_data, message.block_hash, (ips[0], udp_port))
 
 
 def receive_block(block_name, block_data, block_hash, sender_ip):
@@ -322,7 +327,11 @@ def send_block(block_name, block_data, requester_ip):
 
 
 def connect_to_tracker():
-    tracker_ip = get_ips_from_dns([tracker_name])[0]
+    tracker_ip = get_ips_from_dns([tracker_name])
+    if len(tracker_ip) == 0:
+        print("Não foi possível estabelecer uma conexão ao tracker.")
+        sys.exit(1)
+    tracker_ip = tracker_ip[0]
     try:
         tcp_socket.connect((tracker_ip, int(tracker_port)))
         files_info = []
@@ -402,6 +411,9 @@ def transfer_file(file_name, blocks_by_owner_name):
     print("LIST IS " + str(list(blocks_by_owner_name.keys())))
     ips = get_ips_from_dns(list(blocks_by_owner_name.keys()))
     print("IPS = " + str(ips))
+    if len(ips) == 0:
+        print("Não foi possível resolver nomes para pedir ficheiro")
+        sys.exit(0)
     blocks_by_owner = {ips[i]: values[i] for i in range(len(ips))}
 
     # LISTA DE OWNERS ORDENADA POR VELOCIDADE DE LIGAÇÃO
@@ -611,14 +623,28 @@ def get_ips_from_dns(requested_ips):
 
     contact_dns(MY_NAME, udp_socket, requested_ips, reply_token)
     ips = []
-    while True:
+    start_time = time.time()
+    timeout_counter = 0
+    while timeout_counter < 3:
+        if time.time() - start_time > TIMEOUT:
+            timeout_counter = timeout_counter + 1
+            start_time = time.time()
+            continue
         if reply_token not in dns_replies:
             continue
         ips = dns_replies[reply_token].ips
         with dns_replies_lock:
             del dns_replies[reply_token]
         break
-    return ips
+    if timeout_counter != 3:
+        return ips
+    print("DNS TIMEOUT ERROR")
+    choice = ''
+    while choice != 'n':
+        choice = input("Deseja tentar outra vez? (y/n)")
+        if choice == 'y':
+            return get_ips_from_dns(requested_ips)
+    return []
 
 
 if __name__ == "__main__":
