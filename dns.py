@@ -5,13 +5,29 @@ import time
 import message_types
 import pickle
 
+# Tamanho do buffer
 BUFFER_SIZE = 1024
+
+# Dicionário que liga nomes ao seu IP
 names = {}
+
+# Tempo de vida de uma entrada nos dicionários de nomes, é decrementado conforme o UPDATE_TIMER e quando chega a 0
+# o nome é apagado da memória
 TIME_TO_LIVE = 1
-UPDATE_TIMER = 20
+
+# Tempo, em segundos, até ser atualizada a lista de nomes, que vai apagar um nome ou decrementar o tempo de vida
+UPDATE_TIMER = 60
+
+# Socket que o DNS usa, em UDP
 dns_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+# Lock para utilizar o dicionário de nomes
 lock = threading.Lock()
+
+# IP do DNS, estático, tem de ser mudado conforme a topologia do core
 DNS_IP = "10.0.7.10"
+
+# Port do DNS
 DNS_PORT = 9091
 
 
@@ -24,6 +40,7 @@ def main():
         threading.Thread(target=reply_task, args=[pickle_msg, ip, port]).start()
 
 
+# Esta é a função que trata de receber pedidos e guardar nomes e IPs em memória
 def reply_task(pickle_msg, ip, port):
     try:
         message = pickle.loads(pickle_msg)
@@ -32,27 +49,35 @@ def reply_task(pickle_msg, ip, port):
     else:
         if message.type == message_types.MessageType.DNS_REQUEST:
             with lock:
+                # Guarda o nome e IP de quem enviou o pedido
                 names[message.sender_name] = (ip, TIME_TO_LIVE)
                 print("Received request from " + message.sender_name)
+                # Vê se existe pedidos na mensagem. Apenas o tracker é que envia uma mensagem sem pedidos quando é
+                # ligado para ser guardado o seu IP
                 if len(message.requests) > 0:
                     replies = []
                     for request in message.requests:
                         print("he wants " + request)
+                        # Ignora pedidos que não estão guardados
                         if request not in names:
                             print(request + " não está registado.")
                             continue
                         (req, _) = names[request]
                         names[request] = (req, TIME_TO_LIVE)
                         replies.append(req)
+                    # Responde com o token do pedido e as respostas
                     reply = message_types.DnsReply(message.reply_token, replies)
-                    print((ip, port))
                     dns_socket.sendto(pickle.dumps(reply), (ip, port))
                     print("mandou")
 
 
+# Esta função trata de decrementar o TIME_TO_LIVE de cada entrada, a cada UPDATE_TIMER segundos, e quando vê que uma
+# das entradas está a 0, apaga-a
 def update_task():
     while True:
+        # Espera um certo tempo
         time.sleep(UPDATE_TIMER)
+        # Guarda todos os nomes que têm de ser removidos
         to_remove = []
         with lock:
             dict_iter = iter(names.items())
@@ -62,6 +87,7 @@ def update_task():
                     to_remove.append(name)
                 else:
                     names[name] = (ip, timer - 1)
+            # Remove todos os nomes que ultrapassaram o tempo limite de vida sem ser pedidos
             for name in to_remove:
                 names.pop(name)
                 print("removi " + name)
@@ -73,6 +99,7 @@ if __name__ == "__main__":
 
 # Esta função está aqui para ser usada pelo tracker e node, e ser desnecessário programá-la igualmente em dois sítios
 # diferentes, ou ter um ficheiro só para esta função.
+# Envia pedidos ao DNS
 def contact_dns(sender_name, udp_socket, requested_names, reply_token):
     dns_message = message_types.DnsRequest(sender_name, requested_names, reply_token)
     udp_socket.sendto(pickle.dumps(dns_message), (DNS_IP, DNS_PORT))

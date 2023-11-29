@@ -85,8 +85,11 @@ block_data_acks_lock = threading.Lock()
 block_request_acks = {}
 # Lock para variável global block_request_acks
 block_request_acks_lock = threading.Lock()
+# Guarda, temporariamente, as respostas que vêm do DNS
 dns_replies = {}
+# Lock para variável global dns_replies
 dns_replies_lock = threading.Lock()
+# Token de resposta usado quando é pedido ao DNS para resolver uma lista de nomes, para inicar-mos uma transferência
 DNS_REPLY_TRANSF_TOKEN = 'transf'
 # Timeout usado para espera de resposta a uma mensagem enviada a outro cliente
 TIMEOUT = 2
@@ -154,6 +157,7 @@ def data_transfer():
                         with block_request_acks_lock:
                             block_request_acks.update({message.file_name: message})
                     elif message.type == msgt.MessageType.DNS_REPLY:
+                        # Guarda a resposta do DNS que recebeu
                         with dns_replies_lock:
                             dns_replies.update({message.reply_token: message})
 
@@ -163,6 +167,7 @@ def data_transfer():
     print(f"PORTA UDP FECHADA")
 
 
+# Pede ao DNS o IP do nodo que lhe pediu um bloco, depois realiza essa transferência
 def get_ips_to_handle_request(message):
     print(f"RECEBI UMA MENSAGEM COM UM PEDIDO DE FICHEIRO")
     ips = get_ips_from_dns([message.peer_name])
@@ -173,6 +178,7 @@ def get_ips_to_handle_request(message):
         handle_block_request(message.data_hash, message.file_name, message.blocks, (ips[0], udp_port))
 
 
+# Pede ao DNS o IP do nodo que lhe enviou um bloco, para poder dar uma repsosta
 def get_ips_to_receive_block(message):
     ips = get_ips_from_dns([message.peer_name])
     if len(ips) == 0:
@@ -205,7 +211,7 @@ def receive_block(block_name, block_data, block_hash, sender_ip):
     while corrupted:
         with open(save_path_temp, 'wb') as file:
             file.write(block_data)
-        # Certifica-se quenão há erros a escrever o bloco no ficheiro, visto que o bloco não estava corrompido quando foi recebido
+        # Certifica-se que não há erros a escrever o bloco no ficheiro, visto que o bloco não estava corrompido quando foi recebido
         if calculate_file_hash(save_path_temp) == block_hash:
             corrupted = False
 
@@ -310,7 +316,7 @@ def update_tracker(block_name):
 
 # Processa um pedido de blocos
 def handle_block_request(data_hash, file_name, blocks, requester_ip):
-    # Calcula a hash da lista de blocos que foi pedida com a hash calcula por quem enviou o pedido
+    # Calcula a hash da lista de blocos que foi pedida com a hash calculada por quem enviou o pedido
     # Se forem iguais, envia ack a dizer que recebeu o pedido e que não está corrompido e continua o processamento do pedido
     # Se forem diferents, envia ack a dizer que recebeu o pedido e que está corrompido e interrompe o processamento do pedido
     if calculate_data_hash(bytes(blocks)) == data_hash:
@@ -392,6 +398,7 @@ def send_block(block_name, block_data, requester_ip):
 
 # Conecta-se ao servidor
 def connect_to_tracker():
+    # Pede ao DNS o IP do tracker
     tracker_ip = get_ips_from_dns([tracker_name])
     if len(tracker_ip) == 0:
         print("Não foi possível estabelecer uma conexão ao tracker.")
@@ -411,7 +418,7 @@ def connect_to_tracker():
 
         if os.path.exists(TEMP_PATH):
             for _, _, blocks in os.walk(TEMP_PATH):
-                # Por cada bloco na pasta temp, adiciona o nome do bloco, a hash e número total de blocso do ficheiro a
+                # Por cada bloco na pasta temp, adiciona o nome do bloco, a hash e número total de blocos do ficheiro a
                 # que pertence ao blocks_info. Também adiciona os nomes dos blocos ao blocks_available.
                 for block in blocks:
                     parts = block.split("_")
@@ -486,16 +493,15 @@ def find_file(file_name):
 
 
 def transfer_file(file_name, blocks_by_owner_name):
-    # Traduz nomes em IPs
     values = list(blocks_by_owner_name.values())
-    print("ANTES DE FALAR COM DNS")
-    print("LIST IS " + str(list(blocks_by_owner_name.keys())))
+    # Pede ao DNS o IP de todos os nomes a quem quer pedir blocos
     ips = get_ips_from_dns(list(blocks_by_owner_name.keys()))
     print("IPS = " + str(ips))
     if len(ips) == 0:
         print("Não foi possível resolver nomes para pedir ficheiro")
         sys.exit(0)
 
+    # Transforma um dicionário de Nome -> Blocos em IPs -> Blocos
     blocks_by_owner = {ips[i]: values[i] for i in range(len(ips))}
 
     print("A recolher informação sobre o ficheiro. Aguarde...")
@@ -727,6 +733,7 @@ def calculate_data_hash(block_data):
     return hasher.hexdigest()
 
 
+# Pede ao DNS para traduzir uma lista de nomes em lista de IPs
 def get_ips_from_dns(requested_ips):
     reply_token: str
     if len(requested_ips) == 1:
@@ -734,15 +741,18 @@ def get_ips_from_dns(requested_ips):
     else:
         reply_token = DNS_REPLY_TRANSF_TOKEN
 
+    # Envia a mensagem
     contact_dns(MY_NAME, udp_socket, requested_ips, reply_token)
     ips = []
     start_time = time.time()
     timeout_counter = 0
+    # Espera por uma resposta durante um certo tempo, podendo no máximo atinger 3 timeouts
     while timeout_counter < 3:
         if time.time() - start_time > TIMEOUT:
             timeout_counter = timeout_counter + 1
             start_time = time.time()
             continue
+        # Verifica se existe uma resposta na lista de respostas com o token respondente à mensagem que enviou
         if reply_token not in dns_replies:
             continue
         ips = dns_replies[reply_token].ips
@@ -753,6 +763,7 @@ def get_ips_from_dns(requested_ips):
         return ips
     print("DNS TIMEOUT ERROR")
     choice = ''
+    # Caso atinja os 3 timeouts, pergunta ao utilizador se quer tentar  fazer o pedido novamente.
     while choice != 'n':
         choice = input("Deseja tentar outra vez? (y/n)")
         if choice == 'y':

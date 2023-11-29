@@ -50,7 +50,9 @@ class FileInfo:
 files: Dict[str, FileInfo] = {}
 files_lock = threading.Lock()
 CLEANUP_INTERVAL = 15
+# Socket UDP usado para comunicações com o DNS
 udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+# Dicionário para guardar os nomes dos nodos que se conectam a ele
 names = {}
 
 
@@ -79,6 +81,7 @@ def main():
     HOST, _ = tcp_socket.getsockname()
     PORT = 9090
     udp_socket.bind(('', 9091))
+    # Envia ao DNS uma mensagem sem nomes apenas para o DNS guardar o tracker em memória
     contact_dns(socket.gethostname(), udp_socket, [], '')
     if len(sys.argv) == 2:  # Verifica se usa um Port costumizadoo
         PORT = int(sys.argv[1])
@@ -121,6 +124,7 @@ def connection_thread(client_socket, client_ip):
                     if file_name in files and files[file_name].available:
                         for block_number, owners in files[file_name].block_owners.items():
                             for o in owners:
+                                # Vai buscar o nome do owner
                                 owner = names[o]
                                 if owner not in owners_list:
                                     owners_list[owner] = [block_number]
@@ -214,6 +218,10 @@ def clean_client(address):
             files[file].hide_file()
         for file in del_list:
             del files[file]
+
+        # Apaga o respetivo nome da memória
+        if address in names:
+            names.pop(address)
 
 
 if __name__ == '__main__':
