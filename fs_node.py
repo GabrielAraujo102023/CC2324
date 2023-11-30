@@ -630,9 +630,8 @@ def transfer_file(file_name, blocks_by_owner_name):
                 files = read_sys_files(SHARED_FOLDER, False)
                 # Elimina blocos temporários
                 delete_temp_blocks(temp_blocks)
+                print("Transferência concluída")
                 break
-
-    print("TRANSFERENCIA FOI UM SUCESSO")
 
 
 # Envia uma mensagem com um pedido de blocos e retorna true se receber
