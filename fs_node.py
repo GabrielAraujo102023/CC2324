@@ -96,7 +96,6 @@ TIMEOUT = 2
 # Máximo de timeouts que podem acontecer até desistir
 MAX_TIMEOUTS = 3
 MY_NAME = socket.gethostname()
-temp_names = {}
 
 
 def main():
@@ -371,13 +370,15 @@ def send_block(block_name, block_data, requester_ip):
         while block_corrupted:
             udp_socket.sendto(pickle.dumps(block_message), requester_ip)
             start_time = time.time()
+            timeout_count = 0
             # Depois de enviar a mensagem fica à espera de um ack do cliente
             # Se receber um ack a dizer que bloco foi corrompido, envia o bloco de novo
             # Se receber um ack a dizer que o bloco não foi corrompido, termina o envio
             # Se ocorrer um timeout enquanto espera pelo ack, envia o bloco de novo
-            # Se ultrapassar o número máximo de timeouts, desiste de enviar o bloco TODO
+            # Se ultrapassar o número máximo de timeouts, desiste de enviar o bloco
             while True:
-                if time.time() - start_time > TIMEOUT:
+                if time.time() - start_time > TIMEOUT or timeout_count >= MAX_TIMEOUTS:
+                    timeout_count += 1
                     break
 
                 if block_name not in block_data_acks:
@@ -426,18 +427,17 @@ def connect_to_tracker():
                     parts = block.split("_")
                     if parts[1] == "info":
                         continue
+
                     file_name = parts[0]
                     block_number = int(parts[1])
                     file_info_path = os.path.join(TEMP_PATH, file_name + "_info")
+
                     with open(file_info_path, 'r') as file_info:
                         file_hash = file_info.readline()
                         total_blocks = file_info.readline()
 
-                    # Isto está pouco eficiente. Está a adicionar a hash e total_blocks a todos os blocos, mesmo que
-                    # pertençam ao mesmo ficheiro TODO
                     blocks_info.append((block, file_hash, total_blocks))
-                    # Acho que isto está mal. Se o ficheiro já existir, faz overlap ou só adiciona o bloco, sem eliminar
-                    # os que já lá estão? TODO
+
                     with blocks_available_lock:
                         blocks_available.update({file_name: {block_number: False}})
         else:
@@ -568,14 +568,15 @@ def transfer_file(file_name, blocks_by_owner_name):
     missing_block = False
 
     # Enquanto houver blocos necessários, tenta pedir esses blocos
-    while blocks_needed and not missing_block:
+    while blocks_needed:
         # Se não tiver mais clientes a quem pedir um bloco qualquer, para a transferência
         for block in blocks_needed:
             if not any(block in blocks for blocks in blocks_by_owner.values()):
                 missing_block = True
                 break
         if missing_block:
-            print("FICHEIRO COMPLETO INDISPONIVEL NA REDE")
+            print("Não existem mais clientes a quem pedir blocos que faltam")
+            print("Transferência cancelada")
             break
 
         # Distribui pedidos dos blocos a pedir pelos vários owners enquanto existirem blocos a pedir
@@ -620,29 +621,18 @@ def transfer_file(file_name, blocks_by_owner_name):
                 # Remove dos blocos necessários os que já recebeu
                 blocks_needed = [block for block in blocks_needed if block not in blocks_received]
                 print(f"BLOCKS_NEEDED: {blocks_needed}")
-            # Se ainda não recebeu tudo, continua à espera
+            # Se ainda não recebeu tudo o que pediu, continua à espera (para contar com os timeouts do send_block())
             if blocks_needed:
                 tries += 1
             else:
                 # Quando recebe todos os blocos, monta o ficheiro
-                # TODO: Aqui está a assumir que vai sempre acabar por receber todos os blocos necessários. E se não receber?
                 temp_blocks = mount_file(file_name, file_hash)
                 # Atualiza files para incluir o ficheiro acabado de montar
                 files = read_sys_files(SHARED_FOLDER, False)
                 # Elimina blocos temporários
                 delete_temp_blocks(temp_blocks)
-
-                temp_ips = temp_names.values()
-                temp_to_remove = []
-                for ip in blocks_by_owner.keys():
-                    for name, temp_ip in temp_names.items():
-                        if ip == temp_ip:
-                            temp_to_remove.append(name)
-                for name in temp_to_remove:
-                    temp_names.pop(name)
+                print("Transferência concluída")
                 break
-
-    print("TRANSFERENCIA FOI UM SUCESSO")
 
 
 # Envia uma mensagem com um pedido de blocos e retorna true se receber

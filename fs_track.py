@@ -82,7 +82,7 @@ def main():
     PORT = 9090
     udp_socket.bind(('', 9091))
     # Envia ao DNS uma mensagem sem nomes apenas para o DNS guardar o tracker em memória
-    contact_dns(socket.gethostname(), udp_socket, [], '', False)
+    contact_dns(socket.gethostname(), udp_socket, [], '')
     if len(sys.argv) == 2:  # Verifica se usa um Port costumizadoo
         PORT = int(sys.argv[1])
     tcp_socket.bind((HOST, PORT))
