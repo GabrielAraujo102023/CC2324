@@ -96,12 +96,14 @@ TIMEOUT = 2
 # Máximo de timeouts que podem acontecer até desistir
 MAX_TIMEOUTS = 3
 MY_NAME = socket.gethostname()
+temp_names = {}
 
 
 def main():
     # Cria e inicia thread que fica à espera de receber mensagens de outros clientes, na socket udp
     data_transfer_thread = threading.Thread(target=data_transfer)
     data_transfer_thread.start()
+    udp_socket.bind((LOCAL_ADRRESS, udp_port))
     # Conecta-se ao servidor
     connect_to_tracker()
 
@@ -127,7 +129,6 @@ def main():
 
 def data_transfer():
     try:
-        udp_socket.bind((LOCAL_ADRRESS, udp_port))
         print(f"FS Transfer Protocol: à escuta em {LOCAL_ADRRESS} na porta UDP {udp_port} ")
 
         while not EXIT_FLAG:
@@ -169,6 +170,7 @@ def data_transfer():
 
 # Pede ao DNS o IP do nodo que lhe pediu um bloco, depois realiza essa transferência
 def get_ips_to_handle_request(message):
+    # TODO: Adicionar cache ou isso para nao fazer um pedido todas as vezes que pede um bloco
     print(f"RECEBI UMA MENSAGEM COM UM PEDIDO DE FICHEIRO")
     ips = get_ips_from_dns([message.peer_name])
     print("JA FIZ O PEDIDO DOS IPS")
@@ -629,6 +631,15 @@ def transfer_file(file_name, blocks_by_owner_name):
                 files = read_sys_files(SHARED_FOLDER, False)
                 # Elimina blocos temporários
                 delete_temp_blocks(temp_blocks)
+
+                temp_ips = temp_names.values()
+                temp_to_remove = []
+                for ip in blocks_by_owner.keys():
+                    for name, temp_ip in temp_names.items():
+                        if ip == temp_ip:
+                            temp_to_remove.append(name)
+                for name in temp_to_remove:
+                    temp_names.pop(name)
                 break
 
     print("TRANSFERENCIA FOI UM SUCESSO")

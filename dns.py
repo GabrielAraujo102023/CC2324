@@ -13,7 +13,7 @@ names = {}
 
 # Tempo de vida de uma entrada nos dicionários de nomes, é decrementado conforme o UPDATE_TIMER e quando chega a 0
 # o nome é apagado da memória
-TIME_TO_LIVE = 1
+TIME_TO_LIVE = 20
 
 # Tempo, em segundos, até ser atualizada a lista de nomes, que vai apagar um nome ou decrementar o tempo de vida
 UPDATE_TIMER = 60
@@ -49,8 +49,11 @@ def reply_task(pickle_msg, ip, port):
     else:
         if message.type == message_types.MessageType.DNS_REQUEST:
             with lock:
+                cur_ttl = TIME_TO_LIVE
+                if not message.delete:
+                    cur_ttl = -1
                 # Guarda o nome e IP de quem enviou o pedido
-                names[message.sender_name] = (ip, TIME_TO_LIVE)
+                names[message.sender_name] = (ip, cur_ttl)
                 print("Received request from " + message.sender_name)
                 # Vê se existe pedidos na mensagem. Apenas o tracker é que envia uma mensagem sem pedidos quando é
                 # ligado para ser guardado o seu IP
@@ -62,8 +65,9 @@ def reply_task(pickle_msg, ip, port):
                         if request not in names:
                             print(request + " não está registado.")
                             continue
-                        (req, _) = names[request]
-                        names[request] = (req, TIME_TO_LIVE)
+                        (req, req_timer) = names[request]
+                        if req_timer != -1:
+                            names[request] = (req, TIME_TO_LIVE)
                         replies.append(req)
                     # Responde com o token do pedido e as respostas
                     reply = message_types.DnsReply(message.reply_token, replies)
@@ -85,7 +89,7 @@ def update_task():
                 name, (ip, timer) = next(dict_iter)
                 if timer == 0:
                     to_remove.append(name)
-                else:
+                elif timer != -1:
                     names[name] = (ip, timer - 1)
             # Remove todos os nomes que ultrapassaram o tempo limite de vida sem ser pedidos
             for name in to_remove:
@@ -100,6 +104,6 @@ if __name__ == "__main__":
 # Esta função está aqui para ser usada pelo tracker e node, e ser desnecessário programá-la igualmente em dois sítios
 # diferentes, ou ter um ficheiro só para esta função.
 # Envia pedidos ao DNS
-def contact_dns(sender_name, udp_socket, requested_names, reply_token):
-    dns_message = message_types.DnsRequest(sender_name, requested_names, reply_token)
+def contact_dns(sender_name, udp_socket, requested_names, reply_token, delete=True):
+    dns_message = message_types.DnsRequest(sender_name, requested_names, reply_token, delete)
     udp_socket.sendto(pickle.dumps(dns_message), (DNS_IP, DNS_PORT))

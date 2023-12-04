@@ -101,11 +101,12 @@ class BlockRequestMessage:
 
 
 class DnsRequest:
-    def __init__(self, sender_name, requests, reply_token):
+    def __init__(self, sender_name, requests, reply_token, delete=True):
         self.type = MessageType.DNS_REQUEST
         self.sender_name = sender_name
         self.requests = requests
         self.reply_token = reply_token
+        self.delete = delete
 
 
 class DnsReply:
