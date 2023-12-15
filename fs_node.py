@@ -172,6 +172,7 @@ def data_transfer():
 
 # Pede ao DNS o IP do nodo que lhe pediu um bloco, depois realiza essa transferência
 def get_ips_to_handle_request(message):
+    # TODO: Adicionar cache ou isso para nao fazer um pedido todas as vezes que pede um bloco
     print(f"RECEBI UMA MENSAGEM COM UM PEDIDO DE FICHEIRO")
     ips = get_ips_from_dns([message.peer_name])
     print("JA FIZ O PEDIDO DOS IPS")
