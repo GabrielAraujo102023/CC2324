@@ -74,7 +74,7 @@ blocks_available: Dict[str, Dict[int, bool]] = {}
 # Lock para variável global blocks_available
 blocks_available_lock = threading.Lock()
 # Inicializa variável que guarda o IP do próprio cliente
-LOCAL_ADRRESS, _ = udp_socket.getsockname()
+LOCAL_ADRRESS = ""
 # Tamanho do buffer usado para ambas as sockets
 BUFFER_SIZE = 1024
 # Guarda, temporariamente, os acks que recebe dos blocos que transfere para outros clientes
@@ -102,6 +102,7 @@ def main():
     # Cria e inicia thread que fica à espera de receber mensagens de outros clientes, na socket udp
     data_transfer_thread = threading.Thread(target=data_transfer)
     data_transfer_thread.start()
+    udp_socket.bind((LOCAL_ADRRESS, udp_port))
     # Conecta-se ao servidor
     connect_to_tracker()
 
@@ -127,7 +128,9 @@ def main():
 
 def data_transfer():
     try:
-        udp_socket.bind((LOCAL_ADRRESS, udp_port))
+        global LOCAL_ADRRESS
+        LOCAL_ADRRESS, _ = udp_socket.getsockname()
+
         print(f"FS Transfer Protocol: à escuta em {LOCAL_ADRRESS} na porta UDP {udp_port} ")
 
         while not EXIT_FLAG:
