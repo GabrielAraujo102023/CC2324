@@ -96,6 +96,8 @@ TIMEOUT = 2
 # Máximo de timeouts que podem acontecer até desistir
 MAX_TIMEOUTS = 3
 MY_NAME = socket.gethostname()
+ip_cache = {}
+ip_cache_lock = threading.Lock()
 
 
 def main():
@@ -172,14 +174,22 @@ def data_transfer():
 
 # Pede ao DNS o IP do nodo que lhe pediu um bloco, depois realiza essa transferência
 def get_ips_to_handle_request(message):
-    # TODO: Adicionar cache ou isso para nao fazer um pedido todas as vezes que pede um bloco
     print(f"RECEBI UMA MENSAGEM COM UM PEDIDO DE FICHEIRO")
-    ips = get_ips_from_dns([message.peer_name])
-    print("JA FIZ O PEDIDO DOS IPS")
-    if len(ips) == 0:
-        print("Não foi possível resolver o nome do pedido de ficheiro")
+    key = (message.peer_name, message.file_name)
+    if key in ip_cache.keys():
+        ip, _ = ip_cache[key]
+        handle_block_request(message.data_hash, message.file_name, message.blocks, (ip, udp_port)
+                             , message.peer_name)
     else:
-        handle_block_request(message.data_hash, message.file_name, message.blocks, (ips[0], udp_port))
+        ips = get_ips_from_dns([message.peer_name])
+        with ip_cache_lock:
+            ip_cache[key] = (ips[0], 0)
+        print("JA FIZ O PEDIDO DOS IPS")
+        if len(ips) == 0:
+            print("Não foi possível resolver o nome do pedido de ficheiro")
+        else:
+            handle_block_request(message.data_hash, message.file_name, message.blocks, (ips[0], udp_port)
+                                 , message.peer_name)
 
 
 # Pede ao DNS o IP do nodo que lhe enviou um bloco, para poder dar uma repsosta
@@ -319,7 +329,11 @@ def update_tracker(block_name):
 
 
 # Processa um pedido de blocos
-def handle_block_request(data_hash, file_name, blocks, requester_ip):
+def handle_block_request(data_hash, file_name, blocks, requester_ip, requester_name):
+    cache_key = (requester_name, file_name)
+    with ip_cache_lock:
+        ip, n = ip_cache[cache_key]
+        ip_cache[cache_key] = (ip, n + 1)
     # Calcula a hash da lista de blocos que foi pedida com a hash calculada por quem enviou o pedido
     # Se forem iguais, envia ack a dizer que recebeu o pedido e que não está corrompido e continua o processamento do pedido
     # Se forem diferents, envia ack a dizer que recebeu o pedido e que está corrompido e interrompe o processamento do pedido
@@ -343,6 +357,7 @@ def handle_block_request(data_hash, file_name, blocks, requester_ip):
 
             send_block(block_name, block_data, requester_ip)
 
+
     # Não possui o ficheiro completo
     elif file_name in blocks_available:
         with blocks_available_lock:
@@ -360,7 +375,12 @@ def handle_block_request(data_hash, file_name, blocks, requester_ip):
 
                 blocks_available[file_name][block] = False
                 send_block(block_name, block_data, requester_ip)
-
+    with ip_cache_lock:
+        ip, n = ip_cache[cache_key]
+        if n == 1:
+            del ip_cache[cache_key]
+        else:
+            ip_cache[cache_key] = (ip, n - 1)
 
 # Envia uma mensagem com um bloco de um ficheiro a um cliente
 def send_block(block_name, block_data, requester_ip):
