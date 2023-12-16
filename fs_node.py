@@ -468,7 +468,7 @@ def find_file(file_name):
         owners_request = msgt.OwnersRequestMessage(file_name)
         tcp_socket.send(pickle.dumps(owners_request))
         # Recebe a resposta
-        pickle_message = tcp_socket.recv(BUFFER_SIZE)
+        pickle_message = tcp_socket.recv(8192)
         try:
             # Deserializa a mensagem
             blocks_by_owner = pickle.loads(pickle_message).owners
