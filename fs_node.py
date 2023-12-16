@@ -76,7 +76,7 @@ blocks_available_lock = threading.Lock()
 # Inicializa variável que guarda o IP do próprio cliente
 LOCAL_ADRRESS = ""
 # Tamanho do buffer usado para ambas as sockets
-BUFFER_SIZE = 1024
+BUFFER_SIZE = 8192
 # Guarda, temporariamente, os acks que recebe dos blocos que transfere para outros clientes
 block_data_acks = {}
 # Lock para variável global block_data_acks
@@ -178,8 +178,8 @@ def get_ips_to_handle_request(message):
     key = (message.peer_name, message.file_name)
     if key in ip_cache.keys():
         ip, _ = ip_cache[key]
-        handle_block_request(message.data_hash, message.file_name, message.blocks, (ip, udp_port)
-                             , message.peer_name)
+        handle_block_request(message.data_hash, message.file_name, message.blocks, (ip, udp_port),
+                             message.peer_name)
     else:
         ips = get_ips_from_dns([message.peer_name])
         with ip_cache_lock:
@@ -188,8 +188,8 @@ def get_ips_to_handle_request(message):
         if len(ips) == 0:
             print("Não foi possível resolver o nome do pedido de ficheiro")
         else:
-            handle_block_request(message.data_hash, message.file_name, message.blocks, (ips[0], udp_port)
-                                 , message.peer_name)
+            handle_block_request(message.data_hash, message.file_name, message.blocks, (ips[0], udp_port),
+                                 message.peer_name)
 
 
 # Pede ao DNS o IP do nodo que lhe enviou um bloco, para poder dar uma repsosta
@@ -357,7 +357,6 @@ def handle_block_request(data_hash, file_name, blocks, requester_ip, requester_n
 
             send_block(block_name, block_data, requester_ip)
 
-
     # Não possui o ficheiro completo
     elif file_name in blocks_available:
         with blocks_available_lock:
@@ -381,6 +380,7 @@ def handle_block_request(data_hash, file_name, blocks, requester_ip, requester_n
             del ip_cache[cache_key]
         else:
             ip_cache[cache_key] = (ip, n - 1)
+
 
 # Envia uma mensagem com um bloco de um ficheiro a um cliente
 def send_block(block_name, block_data, requester_ip):
@@ -771,11 +771,11 @@ def get_ips_from_dns(requested_ips):
     start_time = time.time()
     timeout_counter = 0
     # Espera por uma resposta durante um certo tempo, podendo no máximo atinger 3 timeouts
-    while timeout_counter < 3:
-        if time.time() - start_time > TIMEOUT:
+    while timeout_counter < 99999:
+        '''if time.time() - start_time > 99:
             timeout_counter = timeout_counter + 1
             start_time = time.time()
-            continue
+            continue'''
         # Verifica se existe uma resposta na lista de respostas com o token respondente à mensagem que enviou
         if reply_token not in dns_replies:
             continue
@@ -783,7 +783,7 @@ def get_ips_from_dns(requested_ips):
         with dns_replies_lock:
             del dns_replies[reply_token]
         break
-    if timeout_counter != 3:
+    if timeout_counter < 3:
         return ips
     print("DNS TIMEOUT ERROR")
     choice = ''
