@@ -53,12 +53,11 @@ class NewConnectionMessage:
 
 # Envio de dados de um bloco a um cliente
 class BlockDataMessage:
-    def __init__(self, block_name, block_data, block_hash, peer_name):
+    def __init__(self, block_name, block_data, block_hash):
         self.type = MessageType.BLOCK_DATA
         self.block_name = block_name
         self.block_data = block_data
         self.block_hash = block_hash
-        self.peer_name = peer_name
 
 
 # Pedido de donos de um ficheiro ao servidor
@@ -90,12 +89,11 @@ class FileInfoRequestMessage:
 
 # Pedido de blocos a um cliente
 class BlockRequestMessage:
-    def __init__(self, file_name, blocks, data_hash, peer_name):
+    def __init__(self, file_name, blocks, data_hash):
         self.type = MessageType.BLOCK_REQUEST
         self.file_name = file_name
         self.blocks = blocks
         self.data_hash = data_hash
-        self.peer_name = peer_name
 
 # ESTRUTURAS DE MENSAGENS USADAS PELO SERVIDOR
 
