@@ -94,7 +94,7 @@ DNS_REPLY_TRANSF_TOKEN = 'transf'
 # Timeout usado para espera de resposta a uma mensagem enviada a outro cliente
 TIMEOUT = 2
 # Máximo de timeouts que podem acontecer até desistir
-MAX_TIMEOUTS = 3
+MAX_TIMEOUTS = 5
 MY_NAME = socket.gethostname()
 ip_cache = {}
 ip_cache_lock = threading.Lock()
@@ -353,6 +353,7 @@ def handle_block_request(data_hash, file_name, blocks, requester_ip, requester_n
             del ip_cache[cache_key]
         else:
             ip_cache[cache_key] = (ip, n - 1)
+
 
 # Envia uma mensagem com um bloco de um ficheiro a um cliente
 def send_block(block_name, block_data, requester_ip):
