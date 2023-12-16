@@ -306,7 +306,7 @@ def handle_block_request(data_hash, file_name, blocks, requester_ip):
     # Calcula a hash da lista de blocos que foi pedida com a hash calculada por quem enviou o pedido
     # Se forem iguais, envia ack a dizer que recebeu o pedido e que não está corrompido e continua o processamento do pedido
     # Se forem diferents, envia ack a dizer que recebeu o pedido e que está corrompido e interrompe o processamento do pedido
-    if calculate_data_hash(bytes(blocks)) == data_hash:
+    if calculate_data_hash(blocks, True) == data_hash:
         block_request_ack = msgt.BlockRequestAckMessage(file_name, False)
         udp_socket.sendto(pickle.dumps(block_request_ack), requester_ip)
     else:
@@ -624,7 +624,7 @@ def transfer_file(file_name, blocks_by_owner_name):
 # Envia uma mensagem com um pedido de blocos e retorna true se receber
 def send_block_request(file_name, blocks, owner_ip):
     # Calcula uma hash dos blocos pedidos e constrói a mensagem
-    data_hash = calculate_data_hash(bytes(blocks))
+    data_hash = calculate_data_hash(blocks, True)
     block_request_message = msgt.BlockRequestMessage(file_name, blocks, data_hash)
     timeouts_count = 0
 
@@ -714,7 +714,10 @@ def calculate_file_hash(file_path):
 
 
 # Calcula a hash de um bloco (bytes) usando sha256
-def calculate_data_hash(block_data):
+def calculate_data_hash(block_data, is_blocks=False):
+    if is_blocks:
+        block_bytes = b''.join(int.to_bytes(i, length=8, byteorder='big') for i in block_data)
+        block_data = block_bytes
     hasher = hashlib.sha256()
     hasher.update(block_data)
     return hasher.hexdigest()
