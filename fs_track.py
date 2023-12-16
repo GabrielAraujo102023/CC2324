@@ -1,12 +1,13 @@
+import os
 import socket
 import sys
 import threading
 import time
 from dataclasses import dataclass
 from typing import Dict
-import message_types
+import message_types as msgt
 import pickle
-from dns import contact_dns
+import subprocess
 
 
 # Classe usada apenas guardar informação de um ficheiro
@@ -50,10 +51,12 @@ class FileInfo:
     # Marca o ficheiro como indisponível na rede
     def hide_file(self):
         self.available = False
+        self.hide_timestamp = time.time()
 
     # Marca o ficheiro como disponível na rede
     def unhide_file(self):
         self.available = True
+        self.hide_timestamp = 0
 
     # Verifica se todos os blocos do ficheiro estão disponíveis
     def are_all_blocks_available(self):
@@ -70,6 +73,9 @@ CLEANUP_INTERVAL = 15
 udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # Dicionário para guardar os nomes dos nodos que se conectam a ele
 names = {}
+os.environ['TERM'] = 'xterm'
+DNS_IP = "10.0.7.10"
+DNS_PORT = 9091
 
 
 # Limpa ficheiros que estejam marcados como indisponiveís
@@ -77,6 +83,9 @@ def cleanup():
     while True:
         # A cada x segundos (x == CLEANUP_INTERVAL)
         time.sleep(CLEANUP_INTERVAL)
+        if not files:
+            continue
+        print("A varrer ficheiros...")
         current_timestamp = time.time()
 
         with files_lock:
@@ -91,23 +100,27 @@ def cleanup():
             if files_to_delete:
                 for file in files_to_delete:
                     del files[file]
-                print("Cleanup executado")
-                print(files)
+                print(f"Ficheiros eliminados da rede: {files_to_delete}")
+                print_files()
+            else:
+                print("Nada a eliminar!")
 
 
 def main():
+    clear_terminal()
     tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     HOST, _ = tcp_socket.getsockname()
+    HOST_NAME = socket.gethostname()
     PORT = 9090
     udp_socket.bind(('', 9091))
     # Envia ao DNS uma mensagem sem nomes apenas para o DNS guardar o tracker em memória
-    contact_dns(socket.gethostname(), udp_socket, [], '')
+    contact_dns(socket.gethostname(), [], '')
     if len(sys.argv) == 2:
         PORT = int(sys.argv[1])
     tcp_socket.bind((HOST, PORT))
     # Torna possível ao servidor aceitar conexões
     tcp_socket.listen()
-    print("Servidor ativo em " + HOST + " porta " + str(PORT))
+    print(f"{HOST_NAME} à escuta na porta {PORT}")
     # Cria thread que vai efetuar cleanup periódico
     cleanup_thread = threading.Thread(target=cleanup)
     cleanup_thread.daemon = True
@@ -115,7 +128,6 @@ def main():
 
     # Aceita uma nova conexão, cria uma thread e uma socket para cada cliente que se conecta
     while True:
-        print("ESPERANDO")
         client_socket, (clientIP, clientPORT) = tcp_socket.accept()
         print("Conectado a cliente: " + str(clientIP) + " na porta " + str(clientPORT))
         t = threading.Thread(target=connection_thread, args=[client_socket, clientIP])
@@ -128,7 +140,7 @@ def connection_thread(client_socket, client_ip):
     try:
         # Fica à espera de receber mensagens do cliente
         while True:
-            pickle_message = client_socket.recv(1024)
+            pickle_message = client_socket.recv(8192)
             # Se não receber sinal nenhum, é porque o cliente crashou
             if not pickle_message:
                 break
@@ -139,9 +151,13 @@ def connection_thread(client_socket, client_ip):
                 print(f"Erro a converter mensagem recebida: {e}")
 
             else:
-                print("message -> " + str(message))
+                if client_ip in names:
+                    print(f"message -> {message.type} from {names[client_ip]}")
+                else:
+                    print(f"message -> {message.type} from {client_ip}")
+
                 # Mensagem com pedido de donos de blocos de um ficheiro
-                if message.type == message_types.MessageType.OWNERS_REQUEST:
+                if message.type == msgt.MessageType.OWNERS_REQUEST:
                     owners_list = {}
                     file_name = message.file_name
 
@@ -157,29 +173,41 @@ def connection_thread(client_socket, client_ip):
                                     owners_list[owner].append(block_number)
 
                     # Constrói mensagem de resposta e envia
-                    response = message_types.OwnersMessage(owners_list)
+                    response = msgt.OwnersMessage(owners_list)
                     client_socket.send(pickle.dumps(response))
 
                 # Mensagem com novo bloco disponível
-                elif message.type == message_types.MessageType.BLOCK_UPDATE:
+                elif message.type == msgt.MessageType.BLOCK_UPDATE:
+                    print(message.block_name)
                     # Atualiza informação do ficheiro
                     update_file_info(message.block_name, client_ip)
+                    print(f"UPDATEI A INFO DO {message.block_name}")
 
                 # Mensagem com pedido de informação sobre um ficheiro
-                elif message.type == message_types.MessageType.FILE_INFO_REQUEST:
+                elif message.type == msgt.MessageType.FILE_INFO_REQUEST:
                     file_name = message.file_name
                     # Constrói mensagem de resposta com a hash e o número total de blocos do ficheiro e envia
-                    response = message_types.FileInfoMessage(files[file_name].file_hash, files[file_name].total_blocks)
+                    response = msgt.FileInfoMessage(files[file_name].file_hash, files[file_name].total_blocks)
                     client_socket.send(pickle.dumps(response))
 
                 # Mensagem com informações da pasta partilhada pelo cliente
-                elif message.type == message_types.MessageType.NEW_CONNECTION:
+                elif message.type == msgt.MessageType.NEW_CONNECTION:
                     names[client_ip] = message.node_name
                     # Processa e guarda a informação recebida
                     new_connection_info(message.files_info, message.blocks_info, client_ip)
 
+                elif message.type == msgt.MessageType.FILE_STATE_REQUEST:
+                    print(message.file_name + str(message.count))
+                    available = False
+                    if message.file_name in files:
+                        available = files[message.file_name].available
+
+                    response = msgt.FileStateMessage(available)
+                    client_socket.send(pickle.dumps(response))
+                    print(f"RESPONDI - {message.file_name} n{message.count}")
+
                 # Mensagem de desconexão
-                elif message.type == message_types.MessageType.DISCONNECT:
+                elif message.type == msgt.MessageType.DISCONNECT:
                     try:
                         # Encerra a socket do cliente
                         client_socket.shutdown(socket.SHUT_RDWR)
@@ -190,7 +218,7 @@ def connection_thread(client_socket, client_ip):
                     clean_client(client_ip)
                     print(f"Cliente {client_ip} desconetou-se. Dados eliminados")
                     client_crashed = False
-                    print(files)
+                    print_files()
                     break
     finally:
         # Deteta se um cliente crashou. Encerra a conexão e elimina os dados do cliente
@@ -202,7 +230,7 @@ def connection_thread(client_socket, client_ip):
             client_socket.close()
             clean_client(client_ip)
             print(f"Cliente {client_ip} crashou. Dados eliminados")
-            print(files)
+            print_files()
 
 
 # Processa uma mensagem com informação da pasta partilhada pelo cliente
@@ -238,7 +266,7 @@ def new_connection_info(files_info, blocks_info, client_ip):
                 else:
                     new_file = FileInfo(total_blocks, client_ip, file_hash, False, block_number)
                     files.update({file: new_file})
-        print(files)
+    print_files()
 
 
 # Adicina cliente à lista de clientes que possui o bloco
@@ -248,6 +276,25 @@ def update_file_info(block_name, clientIP):
         file_name = parts[0]
         block_number = int(parts[1])
         files[file_name].block_owners[block_number].append(clientIP)
+
+
+def print_files():
+    if not files:
+        print("Não há ficheiros na rede")
+        return
+
+    print("Ficheiros na rede:")
+    last = len(files)
+    for e, file in enumerate(files.keys()):
+        if files[file].available:
+            print(f"{file}: Disponível", end="")
+        else:
+            print(f"{file}: Escondido", end="")
+
+        if e < last - 1:
+            print(" | ", end="", flush=True)
+        else:
+            print()
 
 
 # Elimina dados de um cliente
@@ -271,6 +318,15 @@ def clean_client(address):
         # Apaga o respetivo nome da memória
         if address in names:
             names.pop(address)
+
+
+def clear_terminal():
+    subprocess.call("clear", shell=True)
+
+
+def contact_dns(sender_name, requested_names, reply_token, delete=True):
+    dns_message = msgt.DnsRequest(sender_name, requested_names, reply_token, delete)
+    udp_socket.sendto(pickle.dumps(dns_message), (DNS_IP, DNS_PORT))
 
 
 if __name__ == '__main__':

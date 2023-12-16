@@ -8,10 +8,12 @@ class MessageType(Enum):
     OWNERS_REQUEST = auto()
     BLOCK_UPDATE = auto()
     FILE_INFO_REQUEST = auto()
+    FILE_STATE_REQUEST = auto()
 
     # Mensagens server -> cliente
     OWNERS = auto()
     FILE_INFO = auto()
+    FILE_STATE = auto()
 
     # Mensagens cliente -> cliente
     BLOCK_DATA = auto()
@@ -95,6 +97,13 @@ class BlockRequestMessage:
         self.blocks = blocks
         self.data_hash = data_hash
 
+
+class FileStateRequestMessage:
+    def __init__(self, file_name, count):
+        self.type = MessageType.FILE_STATE_REQUEST
+        self.file_name = file_name
+        self.count = count
+
 # ESTRUTURAS DE MENSAGENS USADAS PELO SERVIDOR
 
 
@@ -111,6 +120,12 @@ class FileInfoMessage:
         self.type = MessageType.FILE_INFO
         self.file_hash = file_hash
         self.total_blocks = total_blocks
+
+
+class FileStateMessage:
+    def __init__(self, available):
+        self.type = MessageType.FILE_STATE
+        self.available = available
 
 
 class DnsRequest:

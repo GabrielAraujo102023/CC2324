@@ -1,7 +1,8 @@
+import os
 import socket
+import subprocess
 import threading
 import time
-
 import message_types
 import pickle
 
@@ -30,8 +31,15 @@ DNS_IP = "10.0.7.10"
 # Port do DNS
 DNS_PORT = 9091
 
+os.environ['TERM'] = 'xterm'
+
+
+def clear_terminal():
+    subprocess.call("clear", shell=True)
+
 
 def main():
+    clear_terminal()
     dns_socket.bind(("", DNS_PORT))
     print("DNS ligado")
     threading.Thread(target=update_task).start()
@@ -104,6 +112,4 @@ if __name__ == "__main__":
 # Esta função está aqui para ser usada pelo tracker e node, e ser desnecessário programá-la igualmente em dois sítios
 # diferentes, ou ter um ficheiro só para esta função.
 # Envia pedidos ao DNS
-def contact_dns(sender_name, udp_socket, requested_names, reply_token, delete=True):
-    dns_message = message_types.DnsRequest(sender_name, requested_names, reply_token, delete)
-    udp_socket.sendto(pickle.dumps(dns_message), (DNS_IP, DNS_PORT))
+

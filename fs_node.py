@@ -11,7 +11,6 @@ from typing import Dict
 import select
 import message_types as msgt
 import pickle
-from dns import contact_dns
 
 # Informa sobre que comando usar para executar a aplicação
 if len(sys.argv) < 3 or len(sys.argv) > 4:
@@ -98,28 +97,54 @@ MAX_TIMEOUTS = 5
 MY_NAME = socket.gethostname()
 ip_cache = {}
 ip_cache_lock = threading.Lock()
+transfers = {}
+transfers_lock = threading.Lock()
+HOST_NAME = ""
+tracker_ip = ""
+DNS_IP = "10.0.7.10"
+DNS_PORT = 9091
+tcp_socket_lock = threading.Lock()
 
 
 def main():
+    clear_terminal()
     # Cria e inicia thread que fica à espera de receber mensagens de outros clientes, na socket udp
     data_transfer_thread = threading.Thread(target=data_transfer)
     data_transfer_thread.start()
     udp_socket.bind((LOCAL_ADRRESS, udp_port))
     # Conecta-se ao servidor
     connect_to_tracker()
+    first_time = True
 
     # Menu apresentado ao cliente
     while not EXIT_FLAG:
-        # clear_terminal()
+        if not first_time:
+            clear_terminal()
+            print_transfer_protocol()
+            print_tracker_protocol()
+        first_time = False
+        print("---------------------------------------------------------")
         print("1 - Transferir ficheiro\n"
-              "2 - Fechar conexão\n"
-              "Escolha:")
-        choice = input()
+              "2 - Consultar transferências\n"
+              "3 - Fechar conexão")
+        print("---------------------------------------------------------")
+
+        choice = input("Escolha: ")
         if choice == "1":
-            file_name = input("Que ficheiro quer?: ")
+            clear_terminal()
+            print("Transferir ficheiro")
+            print("---------------------------------------------------------")
+            file_name = input("Nome do ficheiro: ")
             # Procura o ficheiro pedido
             find_file(file_name)
         elif choice == "2":
+            if not transfers:
+                clear_terminal()
+                print("Ainda não realizou transferências!\n")
+                input("Pressionar Enter para voltar ao menu...")
+            else:
+                transfer_menu()
+        elif choice == "3":
             # Desconecta do servidor e encerra aplicação
             disconnect()
 
@@ -128,12 +153,39 @@ def main():
     print(f"DESCONETADO COM SUCESSO!")
 
 
+def transfer_menu():
+    choice = ""
+    while choice != '2':
+        clear_terminal()
+        print("Lista de transferências:")
+        print("---------------------------------------------------------")
+        for file, state in transfers.items():
+            print(f"Ficheiro: {file} | Estado: {state}")
+
+        print("\n---------------------------------------------------------")
+        print("1 - Atualizar lista\n"
+              "2 - Voltar ao menu anterior")
+        print("---------------------------------------------------------")
+
+        choice = input("Escolha: ")
+
+
+def print_transfer_protocol():
+    print(f"FS Transfer Protocol: {HOST_NAME} à escuta na porta UDP {udp_port} ")
+
+
+def print_tracker_protocol():
+    print(f"FS Track Protocol: Conectado com {tracker_ip} na porta {tracker_port}")
+
+
 def data_transfer():
     try:
         global LOCAL_ADRRESS
         LOCAL_ADRRESS, _ = udp_socket.getsockname()
+        global HOST_NAME
+        HOST_NAME = socket.gethostname()
 
-        print(f"FS Transfer Protocol: à escuta em {LOCAL_ADRRESS} na porta UDP {udp_port} ")
+        print_transfer_protocol()
 
         while not EXIT_FLAG:
             # Usado para verificar a exit_flag periodicamente
@@ -149,12 +201,21 @@ def data_transfer():
                 else:
                     if message.type == msgt.MessageType.BLOCK_REQUEST:
                         # Cria thread para processar um pedido de blocos
-                        threading.Thread(target=handle_block_request, args=[message.data_hash, message.file_name,
-                                                                            message.blocks, peer_ip]).start()
+                        handle_block_request_thread = threading.Thread(target=handle_block_request,
+                                                                       args=[message.data_hash, message.file_name,
+                                                                             message.blocks, peer_ip])
+                        handle_block_request_thread.daemon = True
+                        handle_block_request_thread.start()
+
                     elif message.type == msgt.MessageType.BLOCK_DATA:
                         # Cria thread para processar um bloco recebido
-                        threading.Thread(target=receive_block, args=[message.block_name, message.block_data,
-                                                                     message.block_hash, peer_ip]).start()
+                        receive_block_thread = threading.Thread(target=receive_block, args=[message.block_name,
+                                                                                            message.block_data,
+                                                                                            message.block_hash,
+                                                                                            peer_ip])
+                        receive_block_thread.daemon = True
+                        receive_block_thread.start()
+
                     elif message.type == msgt.MessageType.BLOCK_DATA_ACK:
                         # Guarda um block_data_ack que recebeu de um cliente a quem enviou um bloco
                         with block_data_acks_lock:
@@ -261,7 +322,7 @@ def mount_file(file_name, file_hash):
 
     # Ordena os blocos por ordem de escrita
     file_blocks = sorted(file_blocks, key=sort_key)
-    print(f"LISTA DE BLOCOS: {file_blocks}")
+    # print(f"LISTA DE BLOCOS: {file_blocks}")
     mounted_file_path = os.path.join(SHARED_FOLDER, file_name)
 
     mount_complete = False
@@ -285,7 +346,7 @@ def mount_file(file_name, file_hash):
             os.remove(mounted_file_path)
             time.sleep(1)
         else:
-            print("FICHEIRO BEM MONTADO")
+            # print("FICHEIRO BEM MONTADO")
             mount_complete = True
 
     return file_blocks
@@ -293,12 +354,13 @@ def mount_file(file_name, file_hash):
 
 # Informa o servidor que tem um novo bloco de ficheiro disponível
 def update_tracker(block_name):
-    block_update = msgt.BlockUpdateMessage(block_name)
-
-    try:
-        tcp_socket.send(pickle.dumps(block_update))
-    except Exception as e:
-        print(f"ERRO AO ATUALIZAR FICHEIRO NO TRACKER: {e}")
+    print(f"MANDEI BLOCO UPDATE DO {block_name}")
+    with tcp_socket_lock:
+        block_update = msgt.BlockUpdateMessage(block_name)
+        try:
+            tcp_socket.send(pickle.dumps(block_update))
+        except Exception as e:
+            print(f"ERRO AO ATUALIZAR FICHEIRO NO TRACKER: {e}")
 
 
 # Processa um pedido de blocos
@@ -387,6 +449,7 @@ def send_block(block_name, block_data, requester_ip):
 
 # Conecta-se ao servidor
 def connect_to_tracker():
+    global tracker_ip
     # Pede ao DNS o IP do tracker
     tracker_ip = get_ips_from_dns([tracker_name])
     if len(tracker_ip) == 0:
@@ -396,6 +459,8 @@ def connect_to_tracker():
     try:
         # Cria conexão tcp com o servidor
         tcp_socket.connect((tracker_ip, int(tracker_port)))
+        print_tracker_protocol()
+
         files_info = []
         blocks_info = []
 
@@ -422,17 +487,20 @@ def connect_to_tracker():
                         file_hash = file_info.readline()
                         total_blocks = file_info.readline()
 
-                    blocks_info.append((block, file_hash, total_blocks))
+                    blocks_info.append((block, file_hash, int(total_blocks)))
 
                     with blocks_available_lock:
-                        blocks_available.update({file_name: {block_number: False}})
+                        if file_name not in blocks_available:
+                            blocks_available.update({file_name: {block_number: False}})
+                        else:
+                            blocks_available[file_name].update({block_number: False})
         else:
             os.makedirs(TEMP_PATH)
 
         # Informa o servidor dos blocos e ficheiros que quer partilhar
-        new_connection = msgt.NewConnectionMessage(files_info, blocks_info, MY_NAME)
-        tcp_socket.send(pickle.dumps(new_connection))
-        print("Conexão FS Track Protocol com servidor " + tracker_ip + " porta " + str(tracker_port))
+        with tcp_socket_lock:
+            new_connection = msgt.NewConnectionMessage(files_info, blocks_info, MY_NAME)
+            tcp_socket.send(pickle.dumps(new_connection))
 
     except Exception as e:
         print(f"Error connecting to the tracker: {e}")
@@ -455,10 +523,11 @@ def calculate_blocks_number(file):
 def find_file(file_name):
     if file_name not in files:
         # Envia mensagem ao servidor com pedido de donos de blocos do ficheiro pedido
-        owners_request = msgt.OwnersRequestMessage(file_name)
-        tcp_socket.send(pickle.dumps(owners_request))
-        # Recebe a resposta
-        pickle_message = tcp_socket.recv(8192)
+        with tcp_socket_lock:
+            owners_request = msgt.OwnersRequestMessage(file_name)
+            tcp_socket.send(pickle.dumps(owners_request))
+            # Recebe a resposta
+            pickle_message = tcp_socket.recv(BUFFER_SIZE)
         try:
             # Deserializa a mensagem
             blocks_by_owner = pickle.loads(pickle_message).owners
@@ -467,24 +536,22 @@ def find_file(file_name):
         else:
             # Se o ficheiro estiver disponível na rede, recebe um dicionário do tipo {owner: [blocks]}
             if blocks_by_owner:
-                # Cria thread para processar transferência
-                transfer_thread = threading.Thread(target=transfer_file, args=[file_name, blocks_by_owner])
-                transfer_thread.daemon = True
-                transfer_thread.start()
+                # Reúne informação sobre o ficheiro
+                gather_information(file_name, blocks_by_owner)
             else:
-                print("Ficheiro nao encontrado")
+                print("\nFicheiro não encontrado")
                 input("Pressionar Enter para voltar ao menu...")
 
     else:
-        print("Ja possui o ficheiro pedido")
+        print("\nJá possui o ficheiro pedido")
         input("Pressionar Enter para voltar ao menu...")
 
 
-def transfer_file(file_name, blocks_by_owner_name):
+def gather_information(file_name, blocks_by_owner_name):
     values = list(blocks_by_owner_name.values())
     # Pede ao DNS o IP de todos os nomes a quem quer pedir blocos
     ips = get_ips_from_dns(list(blocks_by_owner_name.keys()))
-    print("IPS = " + str(ips))
+    # print("IPS = " + str(ips))
     if len(ips) == 0:
         print("Não foi possível resolver nomes para pedir ficheiro")
         sys.exit(0)
@@ -492,17 +559,25 @@ def transfer_file(file_name, blocks_by_owner_name):
     # Transforma um dicionário de Nome -> Blocos em IPs -> Blocos
     blocks_by_owner = {ips[i]: values[i] for i in range(len(ips))}
 
-    print("A recolher informação sobre o ficheiro. Aguarde...")
+    print("\nA recolher informação sobre o ficheiro. Aguarde...")
     # Calcula velocidade de ligação de cada owner
     latency_by_owner = {owner: get_latency(owner) for owner in blocks_by_owner}
     # Ordena o dicinário por velocidade de ligação do owner
     blocks_by_owner_sorted = dict(sorted(blocks_by_owner.items(), key=lambda item: latency_by_owner[item[0]]))
     print("Transferencia vai começar dentro de 3 segundos...")
     time.sleep(3)
-    print("Transferencia iniciada")
+    # Cria thread para processar transferência
+    transfer_thread = threading.Thread(target=transfer_file, args=[file_name, blocks_by_owner_sorted, latency_by_owner])
+    transfer_thread.daemon = True
+    transfer_thread.start()
+    with transfers_lock:
+        transfers[file_name] = "Em curso"
+    input("Transferencia iniciada. Pressionar Enter para voltar ao menu...")
 
+
+def transfer_file(file_name, blocks_by_owner_sorted, latency_by_owner):
     # VERIFICO SE JÁ TENHO INFORMAÇÃO SOBRE O FICHEIRO QUE VOU TRANSFERIR
-    # SE JÁ TIVER, TENHO QUE VER QUE BLOCOS É QUE JÁ TENHO PARA NOS OS PEDIR OUTRA VEZ
+    # SE JÁ TIVER, TENHO QUE VER QUE BLOCOS É QUE JÁ TENHO PARA NAO OS PEDIR OUTRA VEZ
     # SE NÃO TIVER, PEÇO INFORMAÇÃO SOBRE O FICHEIRO
 
     blocks_owned = []
@@ -512,13 +587,19 @@ def transfer_file(file_name, blocks_by_owner_name):
 
     # Se já tem informação sobre o ficheiro que pediu, verifica que blocos já possui para não os voltar a pedir
     if os.path.exists(os.path.join(TEMP_PATH, file_name + "_info")):
+        with open(os.path.join(TEMP_PATH, file_name + "_info"), 'r') as file_info:
+            file_info.readline()
+            total_blocks = list(range(int(file_info.readline())))
+
         with blocks_available_lock:
             blocks_owned = list(blocks_available[file_name].keys())
+
     # Se não, pede informação sobre o ficheiro ao servidor
     else:
-        file_info_request = msgt.FileInfoRequestMessage(file_name)
-        tcp_socket.send(pickle.dumps(file_info_request))
-        pickle_message = tcp_socket.recv(BUFFER_SIZE)
+        with tcp_socket_lock:
+            file_info_request = msgt.FileInfoRequestMessage(file_name)
+            tcp_socket.send(pickle.dumps(file_info_request))
+            pickle_message = tcp_socket.recv(BUFFER_SIZE)
         try:
             file_info = pickle.loads(pickle_message)
         except pickle.UnpicklingError as e:
@@ -538,18 +619,18 @@ def transfer_file(file_name, blocks_by_owner_name):
 
     # Cria uma lista de blocos que vai pedir retirando os que já possui
     blocks_needed = [block for block in total_blocks if block not in blocks_owned]
-    print("BLOCKS NEEDED")
-    print(blocks_needed)
+    # print("BLOCKS NEEDED")
+    # print(blocks_needed)
     blocks_to_request = blocks_needed.copy()
-    print("BLOCKS TO REQUEST")
-    print(blocks_to_request)
+    # print("BLOCKS TO REQUEST")
+    # print(blocks_to_request)
     # Soma os tempos de resposta de todos os owners
     total_latency = sum(latency_by_owner.values())
-    print(f"total latency = {total_latency}")
+    # print(f"total latency = {total_latency}")
     # Lista de owners
     owners = list(blocks_by_owner_sorted.keys())
-    print("OWNERS")
-    print(owners)
+    # print("OWNERS")
+    # print(owners)
     max_blocks_to_request = 5
     missing_block = False
 
@@ -557,16 +638,41 @@ def transfer_file(file_name, blocks_by_owner_name):
     while blocks_needed:
         # Se não tiver mais clientes a quem pedir um bloco qualquer, para a transferência
         for block in blocks_needed:
-            if not any(block in blocks for blocks in blocks_by_owner.values()):
+            if not any(block in blocks for blocks in blocks_by_owner_sorted.values()):
                 missing_block = True
                 break
         if missing_block:
-            print("Não existem mais clientes a quem pedir blocos que faltam")
-            print("Transferência cancelada")
+            with transfers_lock:
+                transfers.update({file_name: "Incompleta"})
             break
 
         # Distribui pedidos dos blocos a pedir pelos vários owners enquanto existirem blocos a pedir
+        count = 0
         while blocks_to_request:
+            count += 1
+            print(f"TOU PRESO {count}")
+            # Verificar se o ficheiro ainda está disponível na rede
+
+            #with tcp_socket_lock:
+             #   file_state_request = msgt.FileStateRequestMessage(file_name, count)
+              #  print(f"VOU MANDAR {file_name} n{count}")
+               # tcp_socket.send(pickle.dumps(file_state_request))
+                # Recebe a resposta
+                #print(f"MANDEI {file_name} n{count}")
+                #pickle_message = tcp_socket.recv(BUFFER_SIZE)
+               # print(f"RECEBI {file_name} n{count}")
+
+            #try:
+                # Deserializa a mensagem
+             #   file_state = pickle.loads(pickle_message)
+            #except pickle.UnpicklingError as e:
+             #   print(f"Erro a converter mensagem recebida: {e}")
+            #else:
+             #   if not file_state.available:
+              #      with transfers_lock:
+               #         transfers.update({file_name: "Incompleta"})
+                #    break
+
             for owner in owners:
                 # Calcula que blocos é que precisa de pedir a um determinado owner
                 blocks = blocks_by_owner_sorted[owner]
@@ -586,14 +692,15 @@ def transfer_file(file_name, blocks_by_owner_name):
 
                     # Pede os blocos e remove-os da lista do owner para não voltar a pedir ao mesmo caso este pedido falhe
                     success = send_block_request(file_name, blocks_to_request_from_owner, owner)
-                    blocks_by_owner[owner] = [block for block in blocks if block not in blocks_to_request_from_owner]
+                    blocks_by_owner_sorted[owner] = [block for block in blocks if
+                                                     block not in blocks_to_request_from_owner]
 
                     # Se o pedido tiver sucesso, remove os blocos pedidos dos blocos a pedir
                     if success:
                         blocks_to_request = [block for block in blocks_to_request if
                                              block not in blocks_to_request_from_owner]
 
-        print("PEDI OS BLOCOS TODOS PELA PRIMEIRA VEZ")
+        # print("PEDI OS BLOCOS TODOS PELA PRIMEIRA VEZ")
         tries = 0
 
         # Verifica blocos que já recebeu.
@@ -603,10 +710,10 @@ def transfer_file(file_name, blocks_by_owner_name):
             if blocks_available[file_name]:
                 # Lista de blocos que já recebu
                 blocks_received = list(blocks_available[file_name].keys())
-                print(f"BLOCKS_RECEIVED: {blocks_received}")
+                # print(f"BLOCKS_RECEIVED: {blocks_received}")
                 # Remove dos blocos necessários os que já recebeu
                 blocks_needed = [block for block in blocks_needed if block not in blocks_received]
-                print(f"BLOCKS_NEEDED: {blocks_needed}")
+                # print(f"BLOCKS_NEEDED: {blocks_needed}")
             # Se ainda não recebeu tudo o que pediu, continua à espera (para contar com os timeouts do send_block())
             if blocks_needed:
                 tries += 1
@@ -617,8 +724,9 @@ def transfer_file(file_name, blocks_by_owner_name):
                 files = read_sys_files(SHARED_FOLDER, False)
                 # Elimina blocos temporários
                 delete_temp_blocks(temp_blocks)
-                print("Transferência concluída")
-                break
+                with transfers_lock:
+                    transfers.update({file_name: "Terminada"})
+                return
 
 
 # Envia uma mensagem com um pedido de blocos e retorna true se receber
@@ -641,7 +749,7 @@ def send_block_request(file_name, blocks, owner_ip):
                 if time.time() - start_time > TIMEOUT:
                     timeouts_count += 1
                     if timeouts_count >= MAX_TIMEOUTS:
-                        print("ATINGIU O MAX DE TIMEOUTS")
+                        # print("ATINGIU O MAX DE TIMEOUTS")
                         return False
                     break
 
@@ -689,8 +797,9 @@ def disconnect():
     global EXIT_FLAG
     try:
         # Envia mensagem ao servidor a dizer que se vai desconectar
-        disconnect_message = msgt.DisconnectMessage()
-        tcp_socket.send(pickle.dumps(disconnect_message))
+        with tcp_socket_lock:
+            disconnect_message = msgt.DisconnectMessage()
+            tcp_socket.send(pickle.dumps(disconnect_message))
         # Fecha socket tcp
         tcp_socket.shutdown(socket.SHUT_RDWR)
         tcp_socket.close()
@@ -713,9 +822,10 @@ def calculate_file_hash(file_path):
     return hasher.hexdigest()
 
 
-# Calcula a hash de um bloco (bytes) usando sha256
+# Calcula a hash de um bloco de data ou de uma lista de blocos usando sha256
 def calculate_data_hash(block_data, is_blocks=False):
     if is_blocks:
+        # Usado para transformar os números dos blocos em bytes
         block_bytes = b''.join(int.to_bytes(i, length=8, byteorder='big') for i in block_data)
         block_data = block_bytes
     hasher = hashlib.sha256()
@@ -732,7 +842,7 @@ def get_ips_from_dns(requested_ips):
         reply_token = DNS_REPLY_TRANSF_TOKEN
 
     # Envia a mensagem
-    contact_dns(MY_NAME, udp_socket, requested_ips, reply_token)
+    contact_dns(MY_NAME, requested_ips, reply_token)
     ips = []
     start_time = time.time()
     timeout_counter = 0
@@ -759,6 +869,11 @@ def get_ips_from_dns(requested_ips):
         if choice == 'y':
             return get_ips_from_dns(requested_ips)
     return []
+
+
+def contact_dns(sender_name, requested_names, reply_token, delete=True):
+    dns_message = msgt.DnsRequest(sender_name, requested_names, reply_token, delete)
+    udp_socket.sendto(pickle.dumps(dns_message), (DNS_IP, DNS_PORT))
 
 
 if __name__ == "__main__":
