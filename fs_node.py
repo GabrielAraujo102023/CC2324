@@ -302,11 +302,7 @@ def update_tracker(block_name):
 
 
 # Processa um pedido de blocos
-def handle_block_request(data_hash, file_name, blocks, requester_ip, requester_name):
-    cache_key = (requester_name, file_name)
-    with ip_cache_lock:
-        ip, n = ip_cache[cache_key]
-        ip_cache[cache_key] = (ip, n + 1)
+def handle_block_request(data_hash, file_name, blocks, requester_ip):
     # Calcula a hash da lista de blocos que foi pedida com a hash calculada por quem enviou o pedido
     # Se forem iguais, envia ack a dizer que recebeu o pedido e que não está corrompido e continua o processamento do pedido
     # Se forem diferents, envia ack a dizer que recebeu o pedido e que está corrompido e interrompe o processamento do pedido
@@ -347,12 +343,6 @@ def handle_block_request(data_hash, file_name, blocks, requester_ip, requester_n
 
                 blocks_available[file_name][block] = False
                 send_block(block_name, block_data, requester_ip)
-    with ip_cache_lock:
-        ip, n = ip_cache[cache_key]
-        if n == 1:
-            del ip_cache[cache_key]
-        else:
-            ip_cache[cache_key] = (ip, n - 1)
 
 
 # Envia uma mensagem com um bloco de um ficheiro a um cliente
