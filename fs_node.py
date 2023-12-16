@@ -149,10 +149,12 @@ def data_transfer():
                 else:
                     if message.type == msgt.MessageType.BLOCK_REQUEST:
                         # Cria thread para processar um pedido de blocos
-                        threading.Thread(target=get_ips_to_handle_request, args=[message]).start()
+                        threading.Thread(target=handle_block_request, args=[message.data_hash, message.file_name,
+                                                                            message.blocks, peer_ip]).start()
                     elif message.type == msgt.MessageType.BLOCK_DATA:
                         # Cria thread para processar um bloco recebido
-                        threading.Thread(target=get_ips_to_receive_block, args=[message]).start()
+                        threading.Thread(target=receive_block, args=[message.block_name, message.block_data,
+                                                                     message.block_hash, peer_ip]).start()
                     elif message.type == msgt.MessageType.BLOCK_DATA_ACK:
                         # Guarda um block_data_ack que recebeu de um cliente a quem enviou um bloco
                         with block_data_acks_lock:
@@ -170,35 +172,6 @@ def data_transfer():
         print(f"ERRO NA PORTA UDP: {e}")
     udp_socket.close()
     print(f"PORTA UDP FECHADA")
-
-
-# Pede ao DNS o IP do nodo que lhe pediu um bloco, depois realiza essa transferência
-def get_ips_to_handle_request(message):
-    print(f"RECEBI UMA MENSAGEM COM UM PEDIDO DE FICHEIRO")
-    key = (message.peer_name, message.file_name)
-    if key in ip_cache.keys():
-        ip, _ = ip_cache[key]
-        handle_block_request(message.data_hash, message.file_name, message.blocks, (ip, udp_port),
-                             message.peer_name)
-    else:
-        ips = get_ips_from_dns([message.peer_name])
-        with ip_cache_lock:
-            ip_cache[key] = (ips[0], 0)
-        print("JA FIZ O PEDIDO DOS IPS")
-        if len(ips) == 0:
-            print("Não foi possível resolver o nome do pedido de ficheiro")
-        else:
-            handle_block_request(message.data_hash, message.file_name, message.blocks, (ips[0], udp_port),
-                                 message.peer_name)
-
-
-# Pede ao DNS o IP do nodo que lhe enviou um bloco, para poder dar uma repsosta
-def get_ips_to_receive_block(message):
-    ips = get_ips_from_dns([message.peer_name])
-    if len(ips) == 0:
-        print("Não foi possível resolver o nome para receber ficheiro")
-    else:
-        receive_block(message.block_name, message.block_data, message.block_hash, (ips[0], udp_port))
 
 
 # Processa um bloco recebido
@@ -381,12 +354,11 @@ def handle_block_request(data_hash, file_name, blocks, requester_ip, requester_n
         else:
             ip_cache[cache_key] = (ip, n - 1)
 
-
 # Envia uma mensagem com um bloco de um ficheiro a um cliente
 def send_block(block_name, block_data, requester_ip):
     # Calcula a hash do bloco a enviar e constrói a mensagem
     block_hash = calculate_data_hash(block_data)
-    block_message = msgt.BlockDataMessage(block_name, block_data, block_hash, MY_NAME)
+    block_message = msgt.BlockDataMessage(block_name, block_data, block_hash)
 
     try:
         block_corrupted = True
@@ -662,7 +634,7 @@ def transfer_file(file_name, blocks_by_owner_name):
 def send_block_request(file_name, blocks, owner_ip):
     # Calcula uma hash dos blocos pedidos e constrói a mensagem
     data_hash = calculate_data_hash(bytes(blocks))
-    block_request_message = msgt.BlockRequestMessage(file_name, blocks, data_hash, MY_NAME)
+    block_request_message = msgt.BlockRequestMessage(file_name, blocks, data_hash)
     timeouts_count = 0
 
     try:
@@ -771,11 +743,11 @@ def get_ips_from_dns(requested_ips):
     start_time = time.time()
     timeout_counter = 0
     # Espera por uma resposta durante um certo tempo, podendo no máximo atinger 3 timeouts
-    while timeout_counter < 99999:
-        '''if time.time() - start_time > 99:
+    while timeout_counter < MAX_TIMEOUTS:
+        if time.time() - start_time > TIMEOUT:
             timeout_counter = timeout_counter + 1
             start_time = time.time()
-            continue'''
+            continue
         # Verifica se existe uma resposta na lista de respostas com o token respondente à mensagem que enviou
         if reply_token not in dns_replies:
             continue
