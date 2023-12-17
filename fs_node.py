@@ -75,7 +75,7 @@ blocks_available_lock = threading.Lock()
 # Inicializa variável que guarda o IP do próprio cliente
 LOCAL_ADRRESS = ""
 # Tamanho do buffer usado para ambas as sockets
-BUFFER_SIZE = 8192
+BUFFER_SIZE = 16384
 # Guarda, temporariamente, os acks que recebe dos blocos que transfere para outros clientes
 block_data_acks = {}
 # Lock para variável global block_data_acks
@@ -160,7 +160,12 @@ def transfer_menu():
         print("Lista de transferências:")
         print("---------------------------------------------------------")
         for file, state in transfers.items():
-            print(f"Ficheiro: {file} | Estado: {state}")
+            if isinstance(state, tuple):
+                with blocks_available_lock:
+                    blocks_transfered = len(blocks_available[file])
+                print(f"-> {file} | Estado: {state[0]} {round(blocks_transfered / state[1] * 100, 2)}%")
+            else:
+                print(f"-> {file} | Estado: {state}")
 
         print("\n---------------------------------------------------------")
         print("1 - Atualizar lista\n"
@@ -252,7 +257,6 @@ def receive_block(block_name, block_data, block_hash, sender_ip):
     save_path_temp = os.path.join(TEMP_PATH, block_name + "temp")
     # Caminho definitivo
     save_path_final = os.path.join(TEMP_PATH, block_name)
-    global files
 
     # Escreve data do bloco para um ficheiro
     corrupted = True
@@ -323,38 +327,37 @@ def mount_file(file_name, file_hash):
     # Ordena os blocos por ordem de escrita
     file_blocks = sorted(file_blocks, key=sort_key)
     # print(f"LISTA DE BLOCOS: {file_blocks}")
-    mounted_file_path = os.path.join(SHARED_FOLDER, file_name)
+    mounted_file_path_temp = os.path.join(SHARED_FOLDER, file_name + "_temp")
+    mounted_file_path_final = os.path.join(SHARED_FOLDER, file_name)
 
     mount_complete = False
-    while not mount_complete:
-        try:
-            with open(mounted_file_path, 'wb') as mounted_file:
-                # Escreve todos os blocos no ficheiro
-                for block in file_blocks:
-                    block_path = os.path.join(TEMP_PATH, block)
+    tries = 0
+    while not mount_complete and tries < 3:
+        tries += 1
+        with open(mounted_file_path_temp, 'wb') as mounted_file_temp:
+            # Escreve todos os blocos no ficheiro
+            for block in file_blocks:
+                block_path = os.path.join(TEMP_PATH, block)
 
-                    with open(block_path, 'rb') as block_data:
-                        block_info = block_data.read()
-                        mounted_file.write(block_info)
-            # Calcula a hash do ficheiro montado e compara com a do ficheiro original
-            # Se forem diferentes, elimina o ficheiro montado e tenta de novo.
-            # Visto que os blocos foram bem recebidos (todas as hashs coincidiam), o ficheiro tem que ser bem montado, eventualmente
-            if calculate_file_hash(mounted_file_path) != file_hash:
-                raise Exception
-        except Exception as e:
-            print(e)
-            os.remove(mounted_file_path)
+                with open(block_path, 'rb') as block_data:
+                    block_info = block_data.read()
+                    mounted_file_temp.write(block_info)
+        # Calcula a hash do ficheiro montado e compara com a do ficheiro original
+        # Se forem diferentes, elimina o ficheiro montado e tenta de novo.
+        # Visto que os blocos foram bem recebidos (todas as hashs coincidiam), o ficheiro tem que ser bem montado, eventualmente
+        if calculate_file_hash(mounted_file_path_temp) != file_hash:
+            os.remove(mounted_file_path_temp)
             time.sleep(1)
         else:
             # print("FICHEIRO BEM MONTADO")
+            shutil.move(mounted_file_path_temp, mounted_file_path_final)
             mount_complete = True
 
-    return file_blocks
+    return file_blocks, mount_complete
 
 
 # Informa o servidor que tem um novo bloco de ficheiro disponível
 def update_tracker(block_name):
-    print(f"MANDEI BLOCO UPDATE DO {block_name}")
     with tcp_socket_lock:
         block_update = msgt.BlockUpdateMessage(block_name)
         try:
@@ -504,6 +507,8 @@ def connect_to_tracker():
 
     except Exception as e:
         print(f"Error connecting to the tracker: {e}")
+        global EXIT_FLAG
+        EXIT_FLAG = True
 
 
 # Calcula o numero total de blocos de um ficheiro
@@ -530,14 +535,15 @@ def find_file(file_name):
             pickle_message = tcp_socket.recv(BUFFER_SIZE)
         try:
             # Deserializa a mensagem
-            blocks_by_owner = pickle.loads(pickle_message).owners
+            message = pickle.loads(pickle_message)
+            blocks_by_owner = message.owners
         except pickle.UnpicklingError as e:
             print(f"Erro a converter mensagem recebida: {e}")
         else:
             # Se o ficheiro estiver disponível na rede, recebe um dicionário do tipo {owner: [blocks]}
             if blocks_by_owner:
                 # Reúne informação sobre o ficheiro
-                gather_information(file_name, blocks_by_owner)
+                gather_information(file_name, blocks_by_owner, message.total_blocks)
             else:
                 print("\nFicheiro não encontrado")
                 input("Pressionar Enter para voltar ao menu...")
@@ -547,7 +553,7 @@ def find_file(file_name):
         input("Pressionar Enter para voltar ao menu...")
 
 
-def gather_information(file_name, blocks_by_owner_name):
+def gather_information(file_name, blocks_by_owner_name, total_blocks):
     values = list(blocks_by_owner_name.values())
     # Pede ao DNS o IP de todos os nomes a quem quer pedir blocos
     ips = get_ips_from_dns(list(blocks_by_owner_name.keys()))
@@ -559,7 +565,7 @@ def gather_information(file_name, blocks_by_owner_name):
     # Transforma um dicionário de Nome -> Blocos em IPs -> Blocos
     blocks_by_owner = {ips[i]: values[i] for i in range(len(ips))}
 
-    print("\nA recolher informação sobre o ficheiro. Aguarde...")
+    print("\nA recolher informação sobre os peers. Aguarde...")
     # Calcula velocidade de ligação de cada owner
     latency_by_owner = {owner: get_latency(owner) for owner in blocks_by_owner}
     # Ordena o dicinário por velocidade de ligação do owner
@@ -571,7 +577,7 @@ def gather_information(file_name, blocks_by_owner_name):
     transfer_thread.daemon = True
     transfer_thread.start()
     with transfers_lock:
-        transfers[file_name] = "Em curso"
+        transfers[file_name] = ("Em curso", total_blocks)
     input("Transferencia iniciada. Pressionar Enter para voltar ao menu...")
 
 
@@ -592,7 +598,8 @@ def transfer_file(file_name, blocks_by_owner_sorted, latency_by_owner):
             total_blocks = list(range(int(file_info.readline())))
 
         with blocks_available_lock:
-            blocks_owned = list(blocks_available[file_name].keys())
+            if file_name in blocks_available:
+                blocks_owned = list(blocks_available[file_name].keys())
 
     # Se não, pede informação sobre o ficheiro ao servidor
     else:
@@ -621,7 +628,6 @@ def transfer_file(file_name, blocks_by_owner_sorted, latency_by_owner):
     blocks_needed = [block for block in total_blocks if block not in blocks_owned]
     # print("BLOCKS NEEDED")
     # print(blocks_needed)
-    blocks_to_request = blocks_needed.copy()
     # print("BLOCKS TO REQUEST")
     # print(blocks_to_request)
     # Soma os tempos de resposta de todos os owners
@@ -643,36 +649,34 @@ def transfer_file(file_name, blocks_by_owner_sorted, latency_by_owner):
                 break
         if missing_block:
             with transfers_lock:
-                transfers.update({file_name: "Incompleta"})
+                transfers.update({file_name: "Interrompida"})
             break
 
+        # Verificar se o ficheiro ainda está disponível na rede
+        with tcp_socket_lock:
+            file_state_request = msgt.FileStateRequestMessage(file_name)
+            tcp_socket.send(pickle.dumps(file_state_request))
+            # Recebe a resposta
+            pickle_message = tcp_socket.recv(BUFFER_SIZE)
+
+        try:
+            # Deserializa a mensagem
+            file_state = pickle.loads(pickle_message)
+        except pickle.UnpicklingError as e:
+            print(f"Erro a converter mensagem recebida: {e}")
+        else:
+            if not file_state.available:
+                with transfers_lock:
+                    transfers.update({file_name: "Interrompida"})
+                break
+
+        blocks_to_request = blocks_needed.copy()
+
         # Distribui pedidos dos blocos a pedir pelos vários owners enquanto existirem blocos a pedir
-        count = 0
         while blocks_to_request:
-            count += 1
-            print(f"TOU PRESO {count}")
-            # Verificar se o ficheiro ainda está disponível na rede
-
-            #with tcp_socket_lock:
-             #   file_state_request = msgt.FileStateRequestMessage(file_name, count)
-              #  print(f"VOU MANDAR {file_name} n{count}")
-               # tcp_socket.send(pickle.dumps(file_state_request))
-                # Recebe a resposta
-                #print(f"MANDEI {file_name} n{count}")
-                #pickle_message = tcp_socket.recv(BUFFER_SIZE)
-               # print(f"RECEBI {file_name} n{count}")
-
-            #try:
-                # Deserializa a mensagem
-             #   file_state = pickle.loads(pickle_message)
-            #except pickle.UnpicklingError as e:
-             #   print(f"Erro a converter mensagem recebida: {e}")
-            #else:
-             #   if not file_state.available:
-              #      with transfers_lock:
-               #         transfers.update({file_name: "Incompleta"})
-                #    break
-
+            bad_owner_list = []
+            if not owners:
+                break
             for owner in owners:
                 # Calcula que blocos é que precisa de pedir a um determinado owner
                 blocks = blocks_by_owner_sorted[owner]
@@ -699,6 +703,18 @@ def transfer_file(file_name, blocks_by_owner_sorted, latency_by_owner):
                     if success:
                         blocks_to_request = [block for block in blocks_to_request if
                                              block not in blocks_to_request_from_owner]
+                    else:
+                        bad_owner_list.append(owner)
+
+            if bad_owner_list:
+                for bad_owner in bad_owner_list:
+                    owners.remove(bad_owner)
+                    del blocks_by_owner_sorted[bad_owner]
+                    total_latency -= latency_by_owner[bad_owner]
+                    del latency_by_owner[bad_owner]
+
+        if not owners:
+            continue
 
         # print("PEDI OS BLOCOS TODOS PELA PRIMEIRA VEZ")
         tries = 0
@@ -719,14 +735,18 @@ def transfer_file(file_name, blocks_by_owner_sorted, latency_by_owner):
                 tries += 1
             else:
                 # Quando recebe todos os blocos, monta o ficheiro
-                temp_blocks = mount_file(file_name, file_hash)
+                temp_blocks, mount_complete = mount_file(file_name, file_hash)
                 # Atualiza files para incluir o ficheiro acabado de montar
-                files = read_sys_files(SHARED_FOLDER, False)
+                if mount_complete:
+                    with transfers_lock:
+                        transfers.update({file_name: "Terminada"})
+                else:
+                    with transfers_lock:
+                        transfers.update({file_name: "Corrompida"})
                 # Elimina blocos temporários
                 delete_temp_blocks(temp_blocks)
-                with transfers_lock:
-                    transfers.update({file_name: "Terminada"})
-                return
+
+                break
 
 
 # Envia uma mensagem com um pedido de blocos e retorna true se receber
@@ -749,7 +769,6 @@ def send_block_request(file_name, blocks, owner_ip):
                 if time.time() - start_time > TIMEOUT:
                     timeouts_count += 1
                     if timeouts_count >= MAX_TIMEOUTS:
-                        # print("ATINGIU O MAX DE TIMEOUTS")
                         return False
                     break
 

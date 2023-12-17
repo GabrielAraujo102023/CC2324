@@ -99,19 +99,19 @@ class BlockRequestMessage:
 
 
 class FileStateRequestMessage:
-    def __init__(self, file_name, count):
+    def __init__(self, file_name):
         self.type = MessageType.FILE_STATE_REQUEST
         self.file_name = file_name
-        self.count = count
 
 # ESTRUTURAS DE MENSAGENS USADAS PELO SERVIDOR
 
 
 # Informar cliente sobre donos de um ficheiro
 class OwnersMessage:
-    def __init__(self, owners):
+    def __init__(self, owners, total_blocks):
         self.type = MessageType.OWNERS
         self.owners = owners
+        self.total_blocks = total_blocks
 
 
 # Informar cliente sobre um ficheiro

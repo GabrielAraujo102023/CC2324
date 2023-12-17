@@ -173,15 +173,13 @@ def connection_thread(client_socket, client_ip):
                                     owners_list[owner].append(block_number)
 
                     # Constrói mensagem de resposta e envia
-                    response = msgt.OwnersMessage(owners_list)
+                    response = msgt.OwnersMessage(owners_list, files[file_name].total_blocks)
                     client_socket.send(pickle.dumps(response))
 
                 # Mensagem com novo bloco disponível
                 elif message.type == msgt.MessageType.BLOCK_UPDATE:
-                    print(message.block_name)
                     # Atualiza informação do ficheiro
                     update_file_info(message.block_name, client_ip)
-                    print(f"UPDATEI A INFO DO {message.block_name}")
 
                 # Mensagem com pedido de informação sobre um ficheiro
                 elif message.type == msgt.MessageType.FILE_INFO_REQUEST:
@@ -197,14 +195,12 @@ def connection_thread(client_socket, client_ip):
                     new_connection_info(message.files_info, message.blocks_info, client_ip)
 
                 elif message.type == msgt.MessageType.FILE_STATE_REQUEST:
-                    print(message.file_name + str(message.count))
                     available = False
                     if message.file_name in files:
                         available = files[message.file_name].available
 
                     response = msgt.FileStateMessage(available)
                     client_socket.send(pickle.dumps(response))
-                    print(f"RESPONDI - {message.file_name} n{message.count}")
 
                 # Mensagem de desconexão
                 elif message.type == msgt.MessageType.DISCONNECT:
