@@ -2,9 +2,9 @@ import hashlib
 import os
 import shutil
 import subprocess
-import sys
 import socket
 import threading
+import sys
 import re
 import time
 from typing import Dict
@@ -349,8 +349,10 @@ def mount_file(file_name, file_hash):
             os.remove(mounted_file_path_temp)
             time.sleep(1)
         else:
+            global files
             # print("FICHEIRO BEM MONTADO")
             shutil.move(mounted_file_path_temp, mounted_file_path_final)
+            files = read_sys_files(SHARED_FOLDER, False)
             mount_complete = True
 
     return file_blocks, mount_complete
@@ -560,7 +562,7 @@ def gather_information(file_name, blocks_by_owner_name, total_blocks):
     # print("IPS = " + str(ips))
     if len(ips) == 0:
         print("Não foi possível resolver nomes para pedir ficheiro")
-        sys.exit(0)
+        sys.exit(1)
 
     # Transforma um dicionário de Nome -> Blocos em IPs -> Blocos
     blocks_by_owner = {ips[i]: values[i] for i in range(len(ips))}
@@ -594,7 +596,7 @@ def transfer_file(file_name, blocks_by_owner_sorted, latency_by_owner):
     # Se já tem informação sobre o ficheiro que pediu, verifica que blocos já possui para não os voltar a pedir
     if os.path.exists(os.path.join(TEMP_PATH, file_name + "_info")):
         with open(os.path.join(TEMP_PATH, file_name + "_info"), 'r') as file_info:
-            file_info.readline()
+            file_hash = file_info.readline().replace('\n', '')
             total_blocks = list(range(int(file_info.readline())))
 
         with blocks_available_lock:

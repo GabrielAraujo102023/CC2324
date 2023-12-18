@@ -160,8 +160,10 @@ def connection_thread(client_socket, client_ip):
                 if message.type == msgt.MessageType.OWNERS_REQUEST:
                     owners_list = {}
                     file_name = message.file_name
+                    total_blocks = 0
 
                     if file_name in files and files[file_name].available:
+                        total_blocks = files[file_name].total_blocks
                         for block_number, owners in files[file_name].block_owners.items():
                             for o in owners:
                                 # Vai buscar o nome do owner
@@ -173,7 +175,7 @@ def connection_thread(client_socket, client_ip):
                                     owners_list[owner].append(block_number)
 
                     # Constrói mensagem de resposta e envia
-                    response = msgt.OwnersMessage(owners_list, files[file_name].total_blocks)
+                    response = msgt.OwnersMessage(owners_list, total_blocks)
                     client_socket.send(pickle.dumps(response))
 
                 # Mensagem com novo bloco disponível
